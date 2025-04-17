@@ -234,10 +234,27 @@ def parse_coordinate(coord_str):
     Example: 'A1' => (0, 0), 'C10' => (2, 9)
     HINT: you might want to add additional input validation here...
     """
+    # check for correct input length
     coord_str = coord_str.strip().upper()
+    if not coord_str or not (2 <= len(coord_str) <= 3):
+        raise ValueError("Coordinate must be at least 2 characters and no more than 3 (e.g. A10)")
+    
+    # check for row letter within bounds
     row_letter = coord_str[0]
+    if not ('A' <= row_letter <= 'J'):
+        raise ValueError(f"Row must be within A-J, got '{row_letter}'")
+    
+    # check for column number being a number
     col_digits = coord_str[1:]
+    try:
+        col_num = int(col_digits)
+    except ValueError:
+        raise ValueError(f"Column must be a number, got '{col_digits}'")
 
+    # check for column number within bounds
+    if not (1 <= col_num <= 10):
+        raise ValueError(f"Column must be within 1-10, got {col_num}")
+    
     row = ord(row_letter) - ord('A')
     col = int(col_digits) - 1  # zero-based
 
