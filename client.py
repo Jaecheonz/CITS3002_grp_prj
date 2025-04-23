@@ -50,8 +50,11 @@ def receive_messages(rfile):
                 # Also detect forfeit messages
                 if "Your opponent forfeited" in line:
                     print("[INFO] Your opponent has left the game.")
-                    # Let the message display for a moment before potentially exiting
-                    # If "The game will now end" message comes after, it will trigger exit
+                    print("[INFO] Game has ended. Exiting...")
+                    running = False
+                    # Force exit to terminate all threads
+                    os._exit(0)
+                    
     except Exception as e:
         print(f"[ERROR] Exception in receive thread: {e}")
         running = False

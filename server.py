@@ -25,71 +25,79 @@ def handle_client(conn, addr):
     """
     print(f"[INFO] New connection from {addr}")
     
-    with connection_lock:
-        # Determine player number (1 or 2)
-        player_num = len(player_connections) + 1
-        
-        # Setup file handlers for the connection
-        rfile = conn.makefile('r')
-        wfile = conn.makefile('w')
-        
-        # Immediately inform the player of their player number
-        wfile.write(f"Welcome! You are Player {player_num}.\n")
-        
-        if player_num == 1:
-            wfile.write("Waiting for Player 2 to connect...\n")
-            wfile.write("Type 'quit' to cancel waiting and disconnect.\n")
+    try:
+        with connection_lock:
+            # Determine player number (1 or 2)
+            player_num = len(player_connections) + 1
+            
+            # Setup file handlers for the connection
+            rfile = conn.makefile('r')
+            wfile = conn.makefile('w')
+            
+            # Immediately inform the player of their player number
+            wfile.write(f"Welcome! You are Player {player_num}.\n")
+            
+            if player_num == 1:
+                wfile.write("Waiting for Player 2 to connect...\n")
+                wfile.write("Type 'quit' to exit.\n")
+            
             wfile.flush()
             
-            # Start a thread to listen for quit command from player 1
-            quit_thread = threading.Thread(
-                target=check_player1_quit,
-                args=(conn, rfile, player_num)
-            )
-            quit_thread.daemon = True
-            quit_thread.start()
-        
-        wfile.flush()
-        
-        # Add connection to our list with all necessary info
-        player_connections.append((conn, addr, rfile, wfile, player_num))
-        
-        # If we have exactly 2 players, start the game
-        if len(player_connections) == 2:
-            # Get both connections
-            conn1, addr1, rfile1, wfile1, _ = player_connections[0]
-            conn2, addr2, rfile2, wfile2, _ = player_connections[1]
+            # Add connection to our list with all necessary info
+            player_connections.append((conn, addr, rfile, wfile, player_num))
             
-            # Start the game in a new thread
-            game_thread = threading.Thread(
-                target=run_game_session,
-                args=(conn1, rfile1, wfile1, conn2, rfile2, wfile2)
-            )
-            game_thread.daemon = True
-            game_thread.start()
-            
-def check_player1_quit(conn, rfile, player_num):
-    """Check if player 1 wants to quit while waiting for player 2"""
-    try:
-        while len(player_connections) < 2:  # While waiting for player 2
-            try:
-                message = rfile.readline().strip()
-                if message.lower() == 'quit':
-                    print(f"[INFO] Player {player_num} has quit while waiting.")
-                    print(f"[INFO] Server is ready for a new game.")
-                    # Remove the player from connections and close their connection
-                    with connection_lock:
-                        # Only clear if this player is still in the list
-                        if player_connections and player_connections[0][4] == player_num:
-                            player_connections.clear()
-                    
-                    conn.close()
-                    break
-            except Exception:
-                # If reading fails, the connection might be closed
-                break
+            # If we have exactly 2 players, start the game
+            if len(player_connections) == 2:
+                # Get both connections
+                conn1, addr1, rfile1, wfile1, _ = player_connections[0]
+                conn2, addr2, rfile2, wfile2, _ = player_connections[1]
+                
+                # Start the game in a new thread
+                game_thread = threading.Thread(
+                    target=run_game_session,
+                    args=(conn1, rfile1, wfile1, conn2, rfile2, wfile2)
+                )
+                game_thread.daemon = True
+                game_thread.start()
+                # This code block will finish execution here
+                
     except Exception as e:
-        print(f"[ERROR] Error in quit checker: {e}")
+        print(f"[ERROR] Connection error: {e}")
+        # If anything goes wrong, clean up player connection
+        with connection_lock:
+            # Remove this player from connections if they're there
+            for i, (c, _, _, _, _) in enumerate(player_connections):
+                if c == conn:
+                    del player_connections[i]
+                    break
+        
+        try:
+            conn.close()
+        except:
+            pass
+        return
+        
+    # If player 1, wait for commands while player 2 isn't connected
+    if player_num == 1:
+        # This code will only execute after the above 'with' block is complete
+        try:
+            while len(player_connections) == 1:  # While waiting for player 2
+                cmd = rfile.readline().strip()
+                if cmd.lower() == 'quit':
+                    print("[INFO] Player 1 has quit while waiting.")
+                    print("[INFO] Server is ready for a new game.")
+                    # Clean up connection
+                    with connection_lock:
+                        player_connections.clear()
+                    conn.close()
+                    return
+        except:
+            # If connection breaks, reset
+            print("[INFO] Player 1 disconnected while waiting.")
+            with connection_lock:
+                player_connections.clear()
+            conn.close()
+            return
 
 def run_game_session(conn1, rfile1, wfile1, conn2, rfile2, wfile2):
     """Run a game session between two connected clients"""
