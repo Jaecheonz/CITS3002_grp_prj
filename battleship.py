@@ -287,7 +287,7 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
         grid_to_show = board.hidden_grid if show_hidden else board.display_grid
         
         # Column headers
-        wfile.write("  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n')
+        wfile.write("+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n')
         
         # Each row with label
         for r in range(board.size):
