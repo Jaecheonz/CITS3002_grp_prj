@@ -7,6 +7,7 @@ Uses threading to separate receiving server messages and sending user input.
 
 import socket
 import threading
+import os
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -38,9 +39,24 @@ def receive_messages(rfile):
             else:
                 # Normal message
                 print(line)
+                
+                # Check for game end messages
+                if "The game will now end." in line or "Game over!" in line:
+                    print("[INFO] Game has ended. Exiting...")
+                    running = False
+                    # Force exit to terminate all threads
+                    os._exit(0)
+                
+                # Also detect forfeit messages
+                if "Your opponent forfeited" in line:
+                    print("[INFO] Your opponent has left the game.")
+                    # Let the message display for a moment before potentially exiting
+                    # If "The game will now end" message comes after, it will trigger exit
     except Exception as e:
         print(f"[ERROR] Exception in receive thread: {e}")
         running = False
+        # Force exit on exception
+        os._exit(1)
 
 def main():
     global running

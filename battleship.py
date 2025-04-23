@@ -9,6 +9,7 @@ Contains core data structures and logic for Battleship, including:
 """
 
 import random
+import threading
 
 BOARD_SIZE = 10
 SHIPS = [
@@ -260,121 +261,6 @@ def parse_coordinate(coord_str):
 
     return (row, col)
 
-
-def run_single_player_game_locally():
-    """
-    A test harness for local single-player mode, demonstrating two approaches:
-    1) place_ships_manually()
-    2) place_ships_randomly()
-
-    Then the player tries to sink them by firing coordinates.
-    """
-    board = Board(BOARD_SIZE)
-
-    # Ask user how they'd like to place ships
-    choice = input("Place ships manually (M) or randomly (R)? [M/R]: ").strip().upper()
-    if choice == 'M':
-        board.place_ships_manually(SHIPS)
-    else:
-        board.place_ships_randomly(SHIPS)
-
-    print("\nNow try to sink all the ships!")
-    moves = 0
-    while True:
-        board.print_display_grid()
-        guess = input("\nEnter coordinate to fire at (or 'quit'): ").strip()
-        if guess.lower() == 'quit':
-            print("Thanks for playing. Exiting...")
-            return
-
-        try:
-            row, col = parse_coordinate(guess)
-            result, sunk_name = board.fire_at(row, col)
-            moves += 1
-
-            if result == 'hit':
-                if sunk_name:
-                    print(f"  >> HIT! You sank the {sunk_name}!")
-                else:
-                    print("  >> HIT!")
-                if board.all_ships_sunk():
-                    board.print_display_grid()
-                    print(f"\nCongratulations! You sank all ships in {moves} moves.")
-                    break
-            elif result == 'miss':
-                print("  >> MISS!")
-            elif result == 'already_shot':
-                print("  >> You've already fired at that location. Try again.")
-
-        except ValueError as e:
-            print("  >> Invalid input:", e)
-
-
-def run_single_player_game_online(rfile, wfile):
-    """
-    A test harness for running the single-player game with I/O redirected to socket file objects.
-    Expects:
-    - rfile: file-like object to .readline() from client
-    - wfile: file-like object to .write() back to client
-    
-    #####
-    NOTE: This function is (intentionally) currently somewhat "broken", which will be evident if you try and play the game via server/client.
-    You can use this as a starting point, or write your own.
-    #####
-    """
-    def send(msg):
-        wfile.write(msg + '\n')
-        wfile.flush()
-
-    def send_board(board):
-        wfile.write("GRID\n")
-        wfile.write("  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n')
-        for r in range(board.size):
-            row_label = chr(ord('A') + r)
-            row_str = " ".join(board.display_grid[r][c] for c in range(board.size))
-            wfile.write(f"{row_label:2} {row_str}\n")
-        wfile.write('\n')
-        wfile.flush()
-
-    def recv():
-        return rfile.readline().strip()
-
-    board = Board(BOARD_SIZE)
-    board.place_ships_randomly(SHIPS)
-
-    send("Welcome to Online Single-Player Battleship! Try to sink all the ships. Type 'quit' to exit.")
-
-    moves = 0
-    while True:
-        send_board(board)
-        send("Enter coordinate to fire at (e.g. B5):")
-        guess = recv()
-        if guess.lower() == 'quit':
-            send("Thanks for playing. Goodbye.")
-            return
-
-        try:
-            row, col = parse_coordinate(guess)
-            result, sunk_name = board.fire_at(row, col)
-            moves += 1
-
-            if result == 'hit':
-                if sunk_name:
-                    send(f"HIT! You sank the {sunk_name}!")
-                else:
-                    send("HIT!")
-                if board.all_ships_sunk():
-                    send_board(board)
-                    send(f"Congratulations! You sank all ships in {moves} moves.")
-                    return
-            elif result == 'miss':
-                send("MISS!")
-            elif result == 'already_shot':
-                send("You've already fired at that location.")
-        except ValueError as e:
-            send(f"Invalid input: {e}")
-
-
 def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
     """
     Run a two-player Battleship game with I/O redirected to socket file objects.
@@ -423,203 +309,183 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
     board1 = Board(BOARD_SIZE)  # Player 1's board (that player 2 fires at)
     board2 = Board(BOARD_SIZE)  # Player 2's board (that player 1 fires at)
     
-    # Setup phase - let players place their ships
+    # Setup phase - let both players place their ships concurrently using threads
     send_to_player(1, "SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
     send_to_player(2, "SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
     
-    # Player 1 ship placement
-    placement1 = recv_from_player(1)
-    if placement1.upper() == 'RANDOM':
-        board1.place_ships_randomly(SHIPS)
-        send_to_player(1, "Ships placed randomly.")
-    else:
-        # Handle manual placement for Player 1
-        send_to_player(1, "Placing ships manually:")
-        for ship_name, ship_size in SHIPS:
-            placed = False
-            while not placed:
-                send_board_to_player(1, board1, True)
-                send_to_player(1, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
-                try:
-                    placement = recv_from_player(1)
-                    if placement.lower() == 'quit':
-                        send_to_player(1, "You forfeited the game.")
-                        send_to_player(2, "Your opponent forfeited. You win!")
-                        return
-                    
-                    parts = placement.strip().split()
-                    if len(parts) != 2:
-                        send_to_player(1, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
-                        continue
-                    
-                    coord_str, orientation_str = parts
-                    row, col = parse_coordinate(coord_str)
-                    orientation = 0 if orientation_str.upper() == 'H' else 1
-                    
-                    if board1.can_place_ship(row, col, ship_size, orientation):
-                        occupied_positions = board1.do_place_ship(row, col, ship_size, orientation)
-                        board1.placed_ships.append({
-                            'name': ship_name,
-                            'positions': occupied_positions
-                        })
-                        send_to_player(1, f"{ship_name} placed successfully.")
-                        placed = True
-                    else:
-                        send_to_player(1, "Cannot place ship there. Try again.")
-                except ValueError as e:
-                    send_to_player(1, f"Invalid input: {e}")
+    # Using threading Event objects to synchronize the two players
+    player1_ready = threading.Event()
+    player2_ready = threading.Event()
     
-    # Player 2 ship placement
-    placement2 = recv_from_player(2)
-    if placement2.upper() == 'RANDOM':
-        board2.place_ships_randomly(SHIPS)
-        send_to_player(2, "Ships placed randomly.")
-    else:
-        # Handle manual placement for Player 2
-        send_to_player(2, "Placing ships manually:")
-        for ship_name, ship_size in SHIPS:
-            placed = False
-            while not placed:
-                send_board_to_player(2, board2, True)
-                send_to_player(2, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
-                try:
-                    placement = recv_from_player(2)
-                    if placement.lower() == 'quit':
-                        send_to_player(2, "You forfeited the game.")
-                        send_to_player(1, "Your opponent forfeited. You win!")
-                        return
-                    
-                    parts = placement.strip().split()
-                    if len(parts) != 2:
-                        send_to_player(2, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
-                        continue
-                    
-                    coord_str, orientation_str = parts
-                    row, col = parse_coordinate(coord_str)
-                    orientation = 0 if orientation_str.upper() == 'H' else 1
-                    
-                    if board2.can_place_ship(row, col, ship_size, orientation):
-                        occupied_positions = board2.do_place_ship(row, col, ship_size, orientation)
-                        board2.placed_ships.append({
-                            'name': ship_name,
-                            'positions': occupied_positions
-                        })
-                        send_to_player(2, f"{ship_name} placed successfully.")
-                        placed = True
-                    else:
-                        send_to_player(2, "Cannot place ship there. Try again.")
-                except ValueError as e:
-                    send_to_player(2, f"Invalid input: {e}")
+    # Define a generic function to handle ship placement for either player
+    def setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event):
+        """Generic function to handle ship placement for any player"""
+        other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
+        
+        placement = recv_from_player(player_num)
+        if placement.lower() == 'quit':
+            send_to_player(player_num, "You forfeited the game.")
+            send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+            
+            # Set both events to allow threads to exit
+            player1_ready.set()
+            player2_ready.set()
+            return False
+        elif placement.upper() == 'RANDOM':
+            player_board.place_ships_randomly(SHIPS)
+            send_to_player(player_num, "Ships placed randomly.")
+            send_board_to_player(player_num, player_board, True)  # Show player their board with ships
+        elif placement.upper() == 'MANUAL':
+            # Handle manual placement
+            send_to_player(player_num, "Placing ships manually:")
+            for ship_name, ship_size in SHIPS:
+                placed = False
+                while not placed:
+                    send_board_to_player(player_num, player_board, True)  # Always show the current state
+                    send_to_player(player_num, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                    try:
+                        placement = recv_from_player(player_num)
+                        if placement.lower() == 'quit':
+                            send_to_player(player_num, "You forfeited the game.")
+                            send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+                            # Set both events to allow threads to exit
+                            player1_ready.set()
+                            player2_ready.set()
+                            return False
+                        
+                        parts = placement.strip().split()
+                        if len(parts) != 2:
+                            send_to_player(player_num, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                            continue
+                        
+                        coord_str, orientation_str = parts
+                        row, col = parse_coordinate(coord_str)
+                        orientation = 0 if orientation_str.upper() == 'H' else 1
+                        
+                        if player_board.can_place_ship(row, col, ship_size, orientation):
+                            occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
+                            player_board.placed_ships.append({
+                                'name': ship_name,
+                                'positions': occupied_positions
+                            })
+                            send_to_player(player_num, f"{ship_name} placed successfully.")
+                            placed = True
+                        else:
+                            send_to_player(player_num, "Cannot place ship there. Try again.")
+                    except ValueError as e:
+                        send_to_player(player_num, f"Invalid input: {e}")
+            
+            # Show final board after all ships placed
+            send_board_to_player(player_num, player_board, True)
+        else:
+            # Invalid placement option - ask player to try again
+            send_to_player(player_num, "Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+            # Recursively call the function again to get valid input
+            return setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event)
+        
+        # Signal that this player is ready and wait for the other player
+        player_ready_event.set()
+        send_to_player(player_num, f"Your ships are placed. Waiting for Player {other_player} to finish placing their ships...")
+        other_player_ready_event.wait()  # Wait for other player to finish
+        return True
+    
+    # Create and start threads for each player's setup
+    p1_setup_thread = threading.Thread(
+        target=setup_player_ships,
+        args=(1, board1, player1_ready, player2_ready)
+    )
+    
+    p2_setup_thread = threading.Thread(
+        target=setup_player_ships,
+        args=(2, board2, player2_ready, player1_ready)
+    )
+    
+    p1_setup_thread.start()
+    p2_setup_thread.start()
+    
+    # Wait for both threads to complete
+    p1_setup_thread.join()
+    p2_setup_thread.join()
+    
+    # Check if setup was completed successfully
+    if not (player1_ready.is_set() and player2_ready.is_set()):
+        # If either event is not set, it means there was an error or forfeit
+        return
     
     # Gameplay phase
     send_to_player(1, "GAME PHASE: All ships have been placed. Game is starting!")
     send_to_player(2, "GAME PHASE: All ships have been placed. Game is starting!")
     
     current_player = 1  # Player 1 goes first
+    
+    def handle_player_turn(player_num, player_board, opponent_board):
+        """Generic function to handle a player's turn in the game"""
+        other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
+        
+        # Show player their own board with ships
+        send_to_player(player_num, "Your board:")
+        send_board_to_player(player_num, player_board, True)
+        # Show player their opponent's board without ships
+        send_to_player(player_num, "Opponent's board:")
+        send_board_to_player(player_num, opponent_board, False)
+        
+        # Player's turn to fire
+        send_to_player(player_num, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
+        send_to_player(other_player, "Opponent's turn. Please wait...")
+        
+        # Get player's move
+        fire_coord = recv_from_player(player_num)
+        if fire_coord.lower() == 'quit':
+            send_to_player(player_num, "You forfeited the game.")
+            send_to_player(other_player, "Your opponent forfeited. You win!")
+            return False
+            
+        try:
+            row, col = parse_coordinate(fire_coord)
+            result, sunk_name = opponent_board.fire_at(row, col)
+            
+            # Notify both players of the result
+            if result == 'hit':
+                if sunk_name:
+                    send_to_player(player_num, f"HIT! You sank their {sunk_name}!")
+                    send_to_player(other_player, f"Your {sunk_name} was sunk!")
+                else:
+                    send_to_player(player_num, "HIT!")
+                    send_to_player(other_player, f"Your ship at {fire_coord} was hit!")
+                
+                # Check if this player won
+                if opponent_board.all_ships_sunk():
+                    send_to_player(player_num, "Congratulations! You've sunk all your opponent's ships. You win!")
+                    send_to_player(other_player, "All your ships have been sunk. Game over!")
+                    return False
+            elif result == 'miss':
+                send_to_player(player_num, "MISS!")
+                send_to_player(other_player, f"Your opponent fired at {fire_coord} and missed.")
+            elif result == 'already_shot':
+                send_to_player(player_num, "You've already fired at that location. Try again.")
+                # Return None to indicate we should retry with the same player
+                return None
+        except ValueError as e:
+            send_to_player(player_num, f"Invalid input: {e}")
+            # Return None to indicate we should retry with the same player
+            return None
+        
+        # Return True to indicate successful turn completion
+        return True
+    
     while True:
-        # Show boards to current player
         if current_player == 1:
-            # Show Player 1 their own board with ships
-            send_to_player(1, "Your board:")
-            send_board_to_player(1, board1, True)
-            # Show Player 1 their opponent's board without ships
-            send_to_player(1, "Opponent's board:")
-            send_board_to_player(1, board2, False)
-            
-            # Player 1's turn to fire
-            send_to_player(1, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
-            send_to_player(2, "Opponent's turn. Please wait...")
-            
-            # Get Player 1's move
-            fire_coord = recv_from_player(1)
-            if fire_coord.lower() == 'quit':
-                send_to_player(1, "You forfeited the game.")
-                send_to_player(2, "Your opponent forfeited. You win!")
-                return
-                
-            try:
-                row, col = parse_coordinate(fire_coord)
-                result, sunk_name = board2.fire_at(row, col)
-                
-                # Notify both players of the result
-                if result == 'hit':
-                    if sunk_name:
-                        send_to_player(1, f"HIT! You sank their {sunk_name}!")
-                        send_to_player(2, f"Your {sunk_name} was sunk!")
-                    else:
-                        send_to_player(1, "HIT!")
-                        send_to_player(2, f"Your ship at {fire_coord} was hit!")
-                    
-                    # Check if Player 1 won
-                    if board2.all_ships_sunk():
-                        send_to_player(1, "Congratulations! You've sunk all your opponent's ships. You win!")
-                        send_to_player(2, "All your ships have been sunk. Game over!")
-                        return
-                elif result == 'miss':
-                    send_to_player(1, "MISS!")
-                    send_to_player(2, f"Your opponent fired at {fire_coord} and missed.")
-                elif result == 'already_shot':
-                    send_to_player(1, "You've already fired at that location. Try again.")
-                    # Don't change player turn if the move was invalid
-                    continue
-            except ValueError as e:
-                send_to_player(1, f"Invalid input: {e}")
-                continue
-            
-            # Switch to Player 2's turn
-            current_player = 2
-            
-        else:  # Player 2's turn
-            # Show Player 2 their own board with ships
-            send_to_player(2, "Your board:")
-            send_board_to_player(2, board2, True)
-            # Show Player 2 their opponent's board without ships
-            send_to_player(2, "Opponent's board:")
-            send_board_to_player(2, board1, False)
-            
-            # Player 2's turn to fire
-            send_to_player(2, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
-            send_to_player(1, "Opponent's turn. Please wait...")
-            
-            # Get Player 2's move
-            fire_coord = recv_from_player(2)
-            if fire_coord.lower() == 'quit':
-                send_to_player(2, "You forfeited the game.")
-                send_to_player(1, "Your opponent forfeited. You win!")
-                return
-                
-            try:
-                row, col = parse_coordinate(fire_coord)
-                result, sunk_name = board1.fire_at(row, col)
-                
-                # Notify both players of the result
-                if result == 'hit':
-                    if sunk_name:
-                        send_to_player(2, f"HIT! You sank their {sunk_name}!")
-                        send_to_player(1, f"Your {sunk_name} was sunk!")
-                    else:
-                        send_to_player(2, "HIT!")
-                        send_to_player(1, f"Your ship at {fire_coord} was hit!")
-                    
-                    # Check if Player 2 won
-                    if board1.all_ships_sunk():
-                        send_to_player(2, "Congratulations! You've sunk all your opponent's ships. You win!")
-                        send_to_player(1, "All your ships have been sunk. Game over!")
-                        return
-                elif result == 'miss':
-                    send_to_player(2, "MISS!")
-                    send_to_player(1, f"Your opponent fired at {fire_coord} and missed.")
-                elif result == 'already_shot':
-                    send_to_player(2, "You've already fired at that location. Try again.")
-                    # Don't change player turn if the move was invalid
-                    continue
-            except ValueError as e:
-                send_to_player(2, f"Invalid input: {e}")
-                continue
-            
-            # Switch to Player 1's turn
-            current_player = 1
-
-if __name__ == "__main__":
-    # Optional: run this file as a script to test single-player mode
-    run_single_player_game_locally()
+            result = handle_player_turn(1, board1, board2)
+        else:
+            result = handle_player_turn(2, board2, board1)
+        
+        # Check the result of the turn
+        if result is False:
+            # Game ended (someone quit or won)
+            break
+        elif result is None:
+            # Invalid move, retry with the same player
+            continue
+        else:
+            # Valid move, switch to the other player
+            current_player = 3 - current_player
