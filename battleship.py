@@ -341,18 +341,18 @@ def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
     p1_setup_thread.start()
     p2_setup_thread.start()
     
-    # Wait for both threads to complete with a timeout
-    p1_setup_thread.join(timeout=120)  # 2-minute timeout
-    p2_setup_thread.join(timeout=120)  # 2-minute timeout
+    # Wait for both threads to complete
+    p1_setup_thread.join()  # Wait for Player 1's setup thread to finish
+    p2_setup_thread.join()  # Wait for Player 2's setup thread to finish
 
     # Check if setup was completed successfully
     if not (player1_ready.is_set() and player2_ready.is_set()):
         # If either event is not set, it means there was an error or timeout
         try:
             if player1_ready.is_set() and not player2_ready.is_set():
-                send_to_player(1, "Player 2 took too long or encountered an error. Game canceled.")
+                send_to_player(1, "Player 2 encountered an error. Game canceled.")
             elif player2_ready.is_set() and not player1_ready.is_set():
-                send_to_player(2, "Player 1 took too long or encountered an error. Game canceled.")
+                send_to_player(2, "Player 1 encountered an error. Game canceled.")
         except:
             pass
         return
