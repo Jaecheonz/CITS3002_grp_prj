@@ -9,7 +9,8 @@ Uses threading to handle multiple clients concurrently.
 
 import socket
 import threading
-from battleship import run_two_player_game
+import select
+from battleship import run_two_player_game_online
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -17,6 +18,7 @@ PORT = 5000
 # Global variables to track connections
 player_connections = []
 connection_lock = threading.Lock()
+player2_connected = threading.Event()
 
 def handle_client(conn, addr):
     """
@@ -48,6 +50,7 @@ def handle_client(conn, addr):
             
             # If we have exactly 2 players, start the game
             if len(player_connections) == 2:
+                player2_connected.set()
                 # Get both connections
                 conn1, addr1, rfile1, wfile1, _ = player_connections[0]
                 conn2, addr2, rfile2, wfile2, _ = player_connections[1]
@@ -79,23 +82,28 @@ def handle_client(conn, addr):
         
     # If player 1, wait for commands while player 2 isn't connected
     if player_num == 1:
-        # This code will only execute after the above 'with' block is complete
         try:
-            while len(player_connections) == 1:  # While waiting for player 2
-                cmd = rfile.readline().strip()
-                if cmd.lower() == 'quit':
-                    print("[INFO] Player 1 has quit while waiting.")
-                    print("[INFO] Server is ready for a new game.")
-                    # Clean up connection
-                    with connection_lock:
-                        player_connections.clear()
-                    conn.close()
-                    return
-        except:
-            # If connection breaks, reset
-            print("[INFO] Player 1 disconnected while waiting.")
+            while not player2_connected.is_set():
+                # Make the socket non-blocking for reading with timeout
+                ready, _, _ = select.select([conn], [], [], 0.5)
+                if ready:
+                    cmd = rfile.readline().strip().upper()
+                    if cmd == 'QUIT':
+                        print("[INFO] Player 1 has quit while waiting.")
+                        print("[INFO] Server is ready for a new game.")
+                        # Clean up connection
+                        with connection_lock:
+                            player_connections.clear()
+                            player2_connected.clear()
+                        conn.close()
+                        return
+
+        except Exception as e:
+            # Now we properly capture the exception as e
+            print(f"[INFO] Player 1 disconnected while waiting: {e}")
             with connection_lock:
                 player_connections.clear()
+                player2_connected.clear()  # Reset the event
             conn.close()
             return
 
@@ -109,18 +117,28 @@ def run_game_session(conn1, rfile1, wfile1, conn2, rfile2, wfile2):
         wfile2.flush()
         
         # Run the game with both players
-        run_two_player_game(rfile1, wfile1, rfile2, wfile2)
+        run_two_player_game_online(rfile1, wfile1, rfile2, wfile2)
+    except ConnectionResetError as e:
+        # Specifically handle connection reset errors
+        print(f"[INFO] A player disconnected during the game: {e}")
     except Exception as e:
         print(f"[ERROR] Game error: {e}")
     finally:
         # Close connections when the game ends
         print("[INFO] Game ended. Closing connections.")
-        conn1.close()
-        conn2.close()
+        try:
+            conn1.close()
+        except:
+            pass
+        try:
+            conn2.close()
+        except:
+            pass
         
         # Reset player connections for a new game
         with connection_lock:
             player_connections.clear()
+            player2_connected.clear()
 
 def main():
     print(f"[INFO] Server listening on {HOST}:{PORT}")

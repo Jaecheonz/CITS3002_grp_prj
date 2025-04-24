@@ -1,13 +1,3 @@
-"""
-battleship.py
-
-Contains core data structures and logic for Battleship, including:
-- Board class for storing ship positions, hits, misses
-- Utility function parse_coordinate for translating e.g. 'B5' -> (row, col)
-- A test harness run_single_player_game() to demonstrate the logic in a local, single-player mode
-
-"""
-
 import random
 import threading
 
@@ -22,24 +12,6 @@ SHIPS = [
 
 
 class Board:
-    """
-    Represents a single Battleship board with hidden ships.
-    We store:
-    - self.hidden_grid: tracks real positions of ships ('S'), hits ('X'), misses ('o')
-    - self.display_grid: the version we show to the player ('.' for unknown, 'X' for hits, 'o' for misses)
-    - self.placed_ships: a list of dicts, each dict with:
-        {
-            'name': <ship_name>,
-            'positions': set of (r, c),
-        }
-        used to determine when a specific ship has been fully sunk.
-
-    In a full 2-player networked game:
-    - Each player has their own Board instance.
-    - When a player fires at their opponent, the server calls
-        opponent_board.fire_at(...) and sends back the result.
-    """
-
     def __init__(self, size=BOARD_SIZE):
         self.size = size
         # '.' for empty water
@@ -49,12 +21,7 @@ class Board:
         self.placed_ships = []  # e.g. [{'name': 'Destroyer', 'positions': {(r, c), ...}}, ...]
 
     def place_ships_randomly(self, ships=SHIPS):
-        """
-        Randomly place each ship in 'ships' on the hidden_grid, storing positions for each ship.
-        In a networked version, you might parse explicit placements from a player's commands
-        (e.g. "PLACE A1 H BATTLESHIP") or prompt the user for board coordinates and placement orientations; 
-        the self.place_ships_manually() can be used as a guide.
-        """
+
         for ship_name, ship_size in ships:
             placed = False
             while not placed:
@@ -72,10 +39,6 @@ class Board:
 
 
     def place_ships_manually(self, ships=SHIPS):
-        """
-        Prompt the user for each ship's starting coordinate and orientation (H or V).
-        Validates the placement; if invalid, re-prompts.
-        """
         print("\nPlease place your ships manually on the board.")
         for ship_name, ship_size in ships:
             while True:
@@ -112,11 +75,6 @@ class Board:
 
 
     def can_place_ship(self, row, col, ship_size, orientation):
-        """
-        Check if we can place a ship of length 'ship_size' at (row, col)
-        with the given orientation (0 => horizontal, 1 => vertical).
-        Returns True if the space is free, False otherwise.
-        """
         if orientation == 0:  # Horizontal
             if col + ship_size > self.size:
                 return False
@@ -132,9 +90,6 @@ class Board:
         return True
 
     def do_place_ship(self, row, col, ship_size, orientation):
-        """
-        Place the ship on hidden_grid by marking 'S', and return the set of occupied positions.
-        """
         occupied = set()
         if orientation == 0:  # Horizontal
             for c in range(col, col + ship_size):
@@ -147,16 +102,6 @@ class Board:
         return occupied
 
     def fire_at(self, row, col):
-        """
-        Fire at (row, col). Return a tuple (result, sunk_ship_name).
-        Possible outcomes:
-        - ('hit', None)          if it's a hit but not sunk
-        - ('hit', <ship_name>)   if that shot causes the entire ship to sink
-        - ('miss', None)         if no ship was there
-        - ('already_shot', None) if that cell was already revealed as 'X' or 'o'
-
-        The server can use this result to inform the firing player.
-        """
         cell = self.hidden_grid[row][col]
         if cell == 'S':
             # Mark a hit
@@ -180,11 +125,6 @@ class Board:
             return ('already_shot', None)
 
     def _mark_hit_and_check_sunk(self, row, col):
-        """
-        Remove (row, col) from the relevant ship's positions.
-        If that ship's positions become empty, return the ship name (it's sunk).
-        Otherwise return None.
-        """
         for ship in self.placed_ships:
             if (row, col) in ship['positions']:
                 ship['positions'].remove((row, col))
@@ -194,29 +134,12 @@ class Board:
         return None
 
     def all_ships_sunk(self):
-        """
-        Check if all ships are sunk (i.e. every ship's positions are empty).
-        """
         for ship in self.placed_ships:
             if len(ship['positions']) > 0:
                 return False
         return True
 
     def print_display_grid(self, show_hidden_board=False):
-        """
-        Print the board as a 2D grid.
-        
-        If show_hidden_board is False (default), it prints the 'attacker' or 'observer' view:
-        - '.' for unknown cells,
-        - 'X' for known hits,
-        - 'o' for known misses.
-        
-        If show_hidden_board is True, it prints the entire hidden grid:
-        - 'S' for ships,
-        - 'X' for hits,
-        - 'o' for misses,
-        - '.' for empty water.
-        """
         # Decide which grid to print
         grid_to_print = self.hidden_grid if show_hidden_board else self.display_grid
 
@@ -230,11 +153,6 @@ class Board:
 
 
 def parse_coordinate(coord_str):
-    """
-    Convert something like 'B5' into zero-based (row, col).
-    Example: 'A1' => (0, 0), 'C10' => (2, 9)
-    HINT: you might want to add additional input validation here...
-    """
     # check for correct input length
     coord_str = coord_str.strip().upper()
     if not coord_str or not (2 <= len(coord_str) <= 3):
@@ -261,25 +179,19 @@ def parse_coordinate(coord_str):
 
     return (row, col)
 
-def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
-    """
-    Run a two-player Battleship game with I/O redirected to socket file objects.
-    
-    Args:
-        rfile1, wfile1: file-like objects for player 1
-        rfile2, wfile2: file-like objects for player 2
-    """
+def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
     def send_to_player(player_num, msg):
-        """Send a message to the specified player"""
-        if player_num == 1:
-            wfile1.write(msg + '\n')
-            wfile1.flush()
-        else:
-            wfile2.write(msg + '\n')
-            wfile2.flush()
+        try:
+            if player_num == 1:
+                wfile1.write(msg + '\n')
+                wfile1.flush()
+            else:
+                wfile2.write(msg + '\n')
+                wfile2.flush()
+        except:
+            pass
     
     def send_board_to_player(player_num, board, show_hidden=False):
-        """Send the current board state to the specified player"""
         wfile = wfile1 if player_num == 1 else wfile2
         wfile.write("GRID\n")
         
@@ -299,11 +211,13 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
         wfile.flush()
     
     def recv_from_player(player_num):
-        """Receive a message from the specified player"""
-        if player_num == 1:
-            return rfile1.readline().strip()
-        else:
-            return rfile2.readline().strip()
+        try:
+            if player_num == 1:
+                return rfile1.readline().strip()
+            else:
+                return rfile2.readline().strip()
+        except ConnectionError:
+            raise ConnectionResetError(f"Player {player_num} disconnected")
     
     # Create boards for both players
     board1 = Board(BOARD_SIZE)  # Player 1's board (that player 2 fires at)
@@ -319,75 +233,99 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
     
     # Define a generic function to handle ship placement for either player
     def setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event):
-        """Generic function to handle ship placement for any player"""
         other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
         
-        placement = recv_from_player(player_num)
-        if placement.lower() == 'quit':
-            send_to_player(player_num, "You forfeited the game.")
-            send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+        try:
+            placement = recv_from_player(player_num)
+            if placement.lower() == 'quit':
+                send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+                
+                # Set both events to allow threads to exit
+                player1_ready.set()
+                player2_ready.set()
+                return False
+            elif placement.upper() == 'RANDOM':
+                player_board.place_ships_randomly(SHIPS)
+                send_to_player(player_num, "Ships placed randomly.")
+                send_board_to_player(player_num, player_board, True)  # Show player their board with ships
+            elif placement.upper() == 'MANUAL':
+                # Handle manual placement
+                send_to_player(player_num, "Placing ships manually:")
+                for ship_name, ship_size in SHIPS:
+                    placed = False
+                    while not placed:
+                        send_board_to_player(player_num, player_board, True)  # Always show the current state
+                        send_to_player(player_num, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                        try:
+                            placement = recv_from_player(player_num)
+                            if placement.lower() == 'quit':
+                                send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+                                # Set both events to allow threads to exit
+                                player1_ready.set()
+                                player2_ready.set()
+                                return False
+                            
+                            parts = placement.strip().split()
+                            if len(parts) != 2:
+                                send_to_player(player_num, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                                continue
+                            
+                            coord_str, orientation_str = parts
+                            row, col = parse_coordinate(coord_str)
+                            orientation = 0 if orientation_str.upper() == 'H' else 1
+                            
+                            if player_board.can_place_ship(row, col, ship_size, orientation):
+                                occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
+                                player_board.placed_ships.append({
+                                    'name': ship_name,
+                                    'positions': occupied_positions
+                                })
+                                send_to_player(player_num, f"{ship_name} placed successfully.")
+                                placed = True
+                            else:
+                                send_to_player(player_num, "Cannot place ship there. Try again.")
+                        except ValueError as e:
+                            send_to_player(player_num, f"Invalid input: {e}")
+                        except ConnectionResetError:
+                            # Player disconnected during ship placement
+                            send_to_player(other_player, "Your opponent disconnected during setup. You win!")
+                            # Set both events to allow threads to exit
+                            player1_ready.set()
+                            player2_ready.set()
+                            return False
+                
+                # Show final board after all ships placed
+                send_board_to_player(player_num, player_board, True)
+            else:
+                # Invalid placement option - ask player to try again
+                send_to_player(player_num, "Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+                # Recursively call the function again to get valid input
+                return setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event)
+            
+            # Signal that this player is ready and wait for the other player
+            player_ready_event.set()
+            send_to_player(player_num, f"Your ships are placed. Waiting for Player {other_player} to finish placing their ships...")
+            
+            # Use a timeout when waiting for the other player
+            if not other_player_ready_event.wait(60):  # 60-second timeout
+                # If timeout reached, check if other player actually connected
+                send_to_player(player_num, "Timeout waiting for opponent. Game canceled.")
+                return False
+            
+            return True
+            
+        except ConnectionResetError:
+            # Player disconnected
+            try:
+                # Notify other player if they're still connected
+                send_to_player(other_player, f"Player {player_num} disconnected during setup. You win!")
+            except:
+                pass
             
             # Set both events to allow threads to exit
             player1_ready.set()
             player2_ready.set()
             return False
-        elif placement.upper() == 'RANDOM':
-            player_board.place_ships_randomly(SHIPS)
-            send_to_player(player_num, "Ships placed randomly.")
-            send_board_to_player(player_num, player_board, True)  # Show player their board with ships
-        elif placement.upper() == 'MANUAL':
-            # Handle manual placement
-            send_to_player(player_num, "Placing ships manually:")
-            for ship_name, ship_size in SHIPS:
-                placed = False
-                while not placed:
-                    send_board_to_player(player_num, player_board, True)  # Always show the current state
-                    send_to_player(player_num, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
-                    try:
-                        placement = recv_from_player(player_num)
-                        if placement.lower() == 'quit':
-                            send_to_player(player_num, "You forfeited the game.")
-                            send_to_player(other_player, "Your opponent forfeited during setup. You win!")
-                            # Set both events to allow threads to exit
-                            player1_ready.set()
-                            player2_ready.set()
-                            return False
-                        
-                        parts = placement.strip().split()
-                        if len(parts) != 2:
-                            send_to_player(player_num, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
-                            continue
-                        
-                        coord_str, orientation_str = parts
-                        row, col = parse_coordinate(coord_str)
-                        orientation = 0 if orientation_str.upper() == 'H' else 1
-                        
-                        if player_board.can_place_ship(row, col, ship_size, orientation):
-                            occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
-                            player_board.placed_ships.append({
-                                'name': ship_name,
-                                'positions': occupied_positions
-                            })
-                            send_to_player(player_num, f"{ship_name} placed successfully.")
-                            placed = True
-                        else:
-                            send_to_player(player_num, "Cannot place ship there. Try again.")
-                    except ValueError as e:
-                        send_to_player(player_num, f"Invalid input: {e}")
-            
-            # Show final board after all ships placed
-            send_board_to_player(player_num, player_board, True)
-        else:
-            # Invalid placement option - ask player to try again
-            send_to_player(player_num, "Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
-            # Recursively call the function again to get valid input
-            return setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event)
-        
-        # Signal that this player is ready and wait for the other player
-        player_ready_event.set()
-        send_to_player(player_num, f"Your ships are placed. Waiting for Player {other_player} to finish placing their ships...")
-        other_player_ready_event.wait()  # Wait for other player to finish
-        return True
     
     # Create and start threads for each player's setup
     p1_setup_thread = threading.Thread(
@@ -403,13 +341,20 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
     p1_setup_thread.start()
     p2_setup_thread.start()
     
-    # Wait for both threads to complete
-    p1_setup_thread.join()
-    p2_setup_thread.join()
-    
+    # Wait for both threads to complete with a timeout
+    p1_setup_thread.join(timeout=120)  # 2-minute timeout
+    p2_setup_thread.join(timeout=120)  # 2-minute timeout
+
     # Check if setup was completed successfully
     if not (player1_ready.is_set() and player2_ready.is_set()):
-        # If either event is not set, it means there was an error or forfeit
+        # If either event is not set, it means there was an error or timeout
+        try:
+            if player1_ready.is_set() and not player2_ready.is_set():
+                send_to_player(1, "Player 2 took too long or encountered an error. Game canceled.")
+            elif player2_ready.is_set() and not player1_ready.is_set():
+                send_to_player(2, "Player 1 took too long or encountered an error. Game canceled.")
+        except:
+            pass
         return
     
     # Gameplay phase
@@ -419,7 +364,6 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
     current_player = 1  # Player 1 goes first
     
     def handle_player_turn(player_num, player_board, opponent_board):
-        """Generic function to handle a player's turn in the game"""
         other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
         
         # Show player their own board with ships
@@ -436,7 +380,6 @@ def run_two_player_game(rfile1, wfile1, rfile2, wfile2):
         # Get player's move
         fire_coord = recv_from_player(player_num)
         if fire_coord.lower() == 'quit':
-            send_to_player(player_num, "You forfeited the game.")
             send_to_player(other_player, "Your opponent forfeited. You win!")
             return False
             
