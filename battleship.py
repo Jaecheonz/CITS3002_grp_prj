@@ -305,13 +305,6 @@ def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
             # Signal that this player is ready and wait for the other player
             player_ready_event.set()
             send_to_player(player_num, f"Your ships are placed. Waiting for Player {other_player} to finish placing their ships...")
-            
-            # Use a timeout when waiting for the other player
-            if not other_player_ready_event.wait(60):  # 60-second timeout
-                # If timeout reached, check if other player actually connected
-                send_to_player(player_num, "Timeout waiting for opponent. Game canceled.")
-                return False
-            
             return True
             
         except ConnectionResetError:
@@ -340,22 +333,6 @@ def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
     
     p1_setup_thread.start()
     p2_setup_thread.start()
-    
-    # Wait for both threads to complete with a timeout
-    p1_setup_thread.join(timeout=120)  # 2-minute timeout
-    p2_setup_thread.join(timeout=120)  # 2-minute timeout
-
-    # Check if setup was completed successfully
-    if not (player1_ready.is_set() and player2_ready.is_set()):
-        # If either event is not set, it means there was an error or timeout
-        try:
-            if player1_ready.is_set() and not player2_ready.is_set():
-                send_to_player(1, "Player 2 took too long or encountered an error. Game canceled.")
-            elif player2_ready.is_set() and not player1_ready.is_set():
-                send_to_player(2, "Player 1 took too long or encountered an error. Game canceled.")
-        except:
-            pass
-        return
     
     # Gameplay phase
     send_to_player(1, "GAME PHASE: All ships have been placed. Game is starting!")
