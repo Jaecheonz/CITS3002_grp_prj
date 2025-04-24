@@ -359,55 +359,61 @@ def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
     def handle_player_turn(player_num, player_board, opponent_board):
         other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
         
-        # Show player their own board with ships
-        send_to_player(player_num, "Your board:")
-        send_board_to_player(player_num, player_board, True)
-        # Show player their opponent's board without ships
-        send_to_player(player_num, "Opponent's board:")
-        send_board_to_player(player_num, opponent_board, False)
-        
-        # Player's turn to fire
-        send_to_player(player_num, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
-        send_to_player(other_player, "Opponent's turn. Please wait...")
-        
-        # Get player's move
-        fire_coord = recv_from_player(player_num)
-        if fire_coord.lower() == 'quit':
-            send_to_player(other_player, "Your opponent forfeited. You win!")
-            return False
-            
         try:
-            row, col = parse_coordinate(fire_coord)
-            result, sunk_name = opponent_board.fire_at(row, col)
+            # Show player their own board with ships
+            send_to_player(player_num, "Your board:")
+            send_board_to_player(player_num, player_board, True)
+            # Show player their opponent's board without ships
+            send_to_player(player_num, "Opponent's board:")
+            send_board_to_player(player_num, opponent_board, False)
             
-            # Notify both players of the result
-            if result == 'hit':
-                if sunk_name:
-                    send_to_player(player_num, f"HIT! You sank their {sunk_name}!")
-                    send_to_player(other_player, f"Your {sunk_name} was sunk!")
-                else:
-                    send_to_player(player_num, "HIT!")
-                    send_to_player(other_player, f"Your ship at {fire_coord} was hit!")
+            # Player's turn to fire
+            send_to_player(player_num, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
+            send_to_player(other_player, "Opponent's turn. Please wait...")
+            
+            # Get player's move
+            fire_coord = recv_from_player(player_num)
+            if fire_coord.lower() == 'quit':
+                send_to_player(other_player, "Your opponent forfeited. You win!")
+                return False
                 
-                # Check if this player won
-                if opponent_board.all_ships_sunk():
-                    send_to_player(player_num, "Congratulations! You've sunk all your opponent's ships. You win!")
-                    send_to_player(other_player, "All your ships have been sunk. Game over!")
-                    return False
-            elif result == 'miss':
-                send_to_player(player_num, "MISS!")
-                send_to_player(other_player, f"Your opponent fired at {fire_coord} and missed.")
-            elif result == 'already_shot':
-                send_to_player(player_num, "You've already fired at that location. Try again.")
+            try:
+                row, col = parse_coordinate(fire_coord)
+                result, sunk_name = opponent_board.fire_at(row, col)
+                
+                # Notify both players of the result
+                if result == 'hit':
+                    if sunk_name:
+                        send_to_player(player_num, f"HIT! You sank their {sunk_name}!")
+                        send_to_player(other_player, f"Your {sunk_name} was sunk!")
+                    else:
+                        send_to_player(player_num, "HIT!")
+                        send_to_player(other_player, f"Your ship at {fire_coord} was hit!")
+                    
+                    # Check if this player won
+                    if opponent_board.all_ships_sunk():
+                        send_to_player(player_num, "Congratulations! You've sunk all your opponent's ships. You win!")
+                        send_to_player(other_player, "All your ships have been sunk. Game over!")
+                        return False
+                elif result == 'miss':
+                    send_to_player(player_num, "MISS!")
+                    send_to_player(other_player, f"Your opponent fired at {fire_coord} and missed.")
+                elif result == 'already_shot':
+                    send_to_player(player_num, "You've already fired at that location. Try again.")
+                    # Return None to indicate we should retry with the same player
+                    return None
+            except ValueError as e:
+                send_to_player(player_num, f"Invalid input: {e}")
                 # Return None to indicate we should retry with the same player
                 return None
-        except ValueError as e:
-            send_to_player(player_num, f"Invalid input: {e}")
-            # Return None to indicate we should retry with the same player
-            return None
-        
-        # Return True to indicate successful turn completion
-        return True
+            
+            # Return True to indicate successful turn completion
+            return True
+
+        except ConnectionResetError:
+            # Handle player disconnection
+            send_to_player(other_player, "Your opponent forfeited")
+            return False
     
     while True:
         if current_player == 1:

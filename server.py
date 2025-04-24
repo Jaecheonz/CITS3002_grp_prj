@@ -121,6 +121,16 @@ def run_game_session(conn1, rfile1, wfile1, conn2, rfile2, wfile2):
     except ConnectionResetError as e:
         # Specifically handle connection reset errors
         print(f"[INFO] A player disconnected during the game: {e}")
+        try:
+            wfile1.write("Your opponent disconnected. The game will now end.\n")
+            wfile1.flush()
+        except:
+            pass
+        try:
+            wfile2.write("Your opponent disconnected. The game will now end.\n")
+            wfile2.flush()
+        except:
+            pass
     except Exception as e:
         print(f"[ERROR] Game error: {e}")
     finally:
