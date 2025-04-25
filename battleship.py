@@ -1,3 +1,8 @@
+# battleship.py
+# Contains core data structures and logic for Battleship, including:
+# - Board class for storing ship positions, hits, misses
+# - Utility function parse_coordinate for translating e.g. 'B5' -> (row, col)
+
 import random
 import threading
 
@@ -156,118 +161,186 @@ def parse_coordinate(coord_str):
     # check for correct input length
     coord_str = coord_str.strip().upper()
     if not coord_str or not (2 <= len(coord_str) <= 3):
-        raise ValueError("Coordinate must be at least 2 characters and no more than 3 (e.g. A10)")
+        raise ValueError("[TIP] Coordinate must be at least 2 characters and no more than 3 (e.g. A10)")
     
     # check for row letter within bounds
     row_letter = coord_str[0]
     if not ('A' <= row_letter <= 'J'):
-        raise ValueError(f"Row must be within A-J, got '{row_letter}'")
+        raise ValueError(f"[TIP] Row must be within A-J, got '{row_letter}'")
     
     # check for column number being a number
     col_digits = coord_str[1:]
     try:
         col_num = int(col_digits)
     except ValueError:
-        raise ValueError(f"Column must be a number, got '{col_digits}'")
+        raise ValueError(f"[TIP] Column must be a number, got '{col_digits}'")
 
     # check for column number within bounds
     if not (1 <= col_num <= 10):
-        raise ValueError(f"Column must be within 1-10, got {col_num}")
+        raise ValueError(f"[TIP] Column must be within 1-10, got {col_num}")
     
     row = ord(row_letter) - ord('A')
     col = int(col_digits) - 1  # zero-based
 
     return (row, col)
 
-def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
-    def send_to_player(player_num, msg):
-        try:
-            if player_num == 1:
-                wfile1.write(msg + '\n')
-                wfile1.flush()
-            else:
-                wfile2.write(msg + '\n')
-                wfile2.flush()
-        except:
-            pass
+def run_multiplayer_game_online(player_rfiles, player_wfiles):
+    # Run a Battleship game with n players.
+    # Args:
+    #     player_rfiles: List of read file objects for each player
+    #     player_wfiles: List of write file objects for each player
+    num_players = len(player_rfiles)
+    if num_players < 2:
+        raise ValueError("At least 2 players required")
     
-    def send_board_to_player(player_num, board, show_hidden=False):
-        wfile = wfile1 if player_num == 1 else wfile2
-        wfile.write("GRID\n")
-        
-        # Which grid to display depends on whether we're showing hidden ships
-        grid_to_show = board.hidden_grid if show_hidden else board.display_grid
-        
-        # Column headers
-        wfile.write("+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n')
-        
-        # Each row with label
-        for r in range(board.size):
-            row_label = chr(ord('A') + r)
-            row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
-            wfile.write(f"{row_label:2} {row_str}\n")
-        
-        wfile.write('\n')
-        wfile.flush()
-    
-    def recv_from_player(player_num):
+    def send_to_player(player_idx, msg):
+        # Send a message to a specific player.
+        if player_idx not in active_players:
+            return False  # Don't send to inactive players
+            
         try:
-            if player_num == 1:
-                return rfile1.readline().strip()
-            else:
-                return rfile2.readline().strip()
+            player_wfiles[player_idx].write(msg + '\n')
+            player_wfiles[player_idx].flush()
+            return True
+        except (BrokenPipeError, ConnectionError, ConnectionResetError) as e:
+            print(f"[ERROR] Failed to send message to Player {player_idx + 1}: {e}\n\n")
+            # Remove disconnected player from active players
+            if player_idx in active_players:  # Check if player is still in the list
+                active_players.remove(player_idx)
+                eliminated_players.add(player_idx)
+                # Notify other players about the disconnection
+                for idx in active_players:
+                    try:
+                        player_wfiles[idx].write(f"Player {player_idx + 1} disconnected from the game.\n")
+                        player_wfiles[idx].flush()
+                    except:
+                        pass  # If this also fails, it will be caught next time
+            return False
+    
+    def send_to_all_players(msg, exclude_idx=None):
+        # Send a message to all players, optionally excluding one.
+        if exclude_idx is None:
+            exclude_idx = []
+        elif not isinstance(exclude_idx, list):
+            exclude_idx = [exclude_idx]
+            
+        for i in active_players:
+            if i not in exclude_idx:
+                send_to_player(i, msg)
+    
+    def send_board_to_player(player_idx, target_board_idx, board, show_hidden=False):
+        # Send a board state to a player.
+        # Args:
+        #     player_idx: Index of the player to send the board to
+        #     target_board_idx: Index of the board to display
+        #     board: The board object
+        #     show_hidden: Whether to show hidden ships
+        if player_idx not in active_players:
+            return False  # Don't send to inactive players
+            
+        try:
+            wfile = player_wfiles[player_idx]
+            
+            # Determine if this is the player's own board or another player's board
+            is_own_board = player_idx == target_board_idx
+            board_owner = "Your" if is_own_board else f"Player {target_board_idx + 1}'s"
+            
+            wfile.write(f"{board_owner} Grid:\n")
+            
+            # Which grid to display depends on whether we're showing hidden ships
+            grid_to_show = board.hidden_grid if show_hidden else board.display_grid
+            
+            # Column headers
+            wfile.write("+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n')
+            
+            # Each row with label
+            for r in range(board.size):
+                row_label = chr(ord('A') + r)
+                row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
+                wfile.write(f"{row_label:2} {row_str}\n")
+            
+            wfile.write('\n')
+            wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionError) as e:
+            print(f"[ERROR] Failed to send board to Player {player_idx + 1}: {e}\n\n")
+            # Remove disconnected player from active players
+            if player_idx in active_players:
+                active_players.remove(player_idx)
+                eliminated_players.add(player_idx)
+                # Notify other players
+                send_to_all_players(f"[INFO] Player {player_idx + 1} disconnected from the game.\n\n", exclude_idx=player_idx)
+            return False
+    
+    def recv_from_player(player_idx):
+        # Receive input from a player.
+        try:
+            return player_rfiles[player_idx].readline().strip()
         except ConnectionError:
-            raise ConnectionResetError(f"Player {player_num} disconnected")
+            raise ConnectionResetError(f"[INFO] Player {player_idx + 1} disconnected\n\n")
     
-    # Create boards for both players
-    board1 = Board(BOARD_SIZE)  # Player 1's board (that player 2 fires at)
-    board2 = Board(BOARD_SIZE)  # Player 2's board (that player 1 fires at)
+    # Create boards for all players
+    boards = [Board(BOARD_SIZE) for _ in range(num_players)]
     
-    # Setup phase - let both players place their ships concurrently using threads
-    send_to_player(1, "SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
-    send_to_player(2, "SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+    # Keep track of active players (initially all are active)
+    active_players = list(range(num_players))
     
-    # Using threading Event objects to synchronize the two players
-    player1_ready = threading.Event()
-    player2_ready = threading.Event()
+    # Setup phase - let all players place their ships concurrently using threads
+    for i in range(num_players):
+        send_to_player(i, f"[INFO] SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
     
-    # Define a generic function to handle ship placement for either player
-    def setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event):
-        other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
+    # Using threading Event objects to synchronize the players
+    player_ready_events = [threading.Event() for _ in range(num_players)]
+    setup_success = [False] * num_players  # Track whether each player completed setup successfully
+    
+    # Define a function to handle ship placement for any player
+    def setup_player_ships(player_idx):
+        nonlocal setup_success
         
         try:
-            placement = recv_from_player(player_num)
+            player_board = boards[player_idx]
+            placement = recv_from_player(player_idx)
+            
             if placement.lower() == 'quit':
-                send_to_player(other_player, "Your opponent forfeited during setup. You win!")
+                send_to_player(player_idx, "[INFO] You forfeited during setup.\n\n")
+                send_to_all_players(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
                 
-                # Set both events to allow threads to exit
-                player1_ready.set()
-                player2_ready.set()
+                # Mark this player as not successful
+                setup_success[player_idx] = False
+                
+                # Set this player's ready event
+                player_ready_events[player_idx].set()
                 return False
+            
             elif placement.upper() == 'RANDOM':
                 player_board.place_ships_randomly(SHIPS)
-                send_to_player(player_num, "Ships placed randomly.")
-                send_board_to_player(player_num, player_board, True)  # Show player their board with ships
+                send_to_player(player_idx, "[INFO] Ships placed randomly.")
+                send_board_to_player(player_idx, player_idx, player_board, True)  # Show player their board with ships
+                
             elif placement.upper() == 'MANUAL':
                 # Handle manual placement
-                send_to_player(player_num, "Placing ships manually:")
+                send_to_player(player_idx, "[INFO] Placing ships manually:")
                 for ship_name, ship_size in SHIPS:
                     placed = False
                     while not placed:
-                        send_board_to_player(player_num, player_board, True)  # Always show the current state
-                        send_to_player(player_num, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                        send_board_to_player(player_idx, player_idx, player_board, True)  # Always show the current state
+                        send_to_player(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
                         try:
-                            placement = recv_from_player(player_num)
+                            placement = recv_from_player(player_idx)
                             if placement.lower() == 'quit':
-                                send_to_player(other_player, "Your opponent forfeited during setup. You win!")
-                                # Set both events to allow threads to exit
-                                player1_ready.set()
-                                player2_ready.set()
+                                send_to_player(player_idx, "[INFO] You forfeited during setup.\n\n")
+                                send_to_all_players(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                                
+                                # Mark this player as not successful
+                                setup_success[player_idx] = False
+                                
+                                # Set this player's ready event
+                                player_ready_events[player_idx].set()
                                 return False
                             
                             parts = placement.strip().split()
                             if len(parts) != 2:
-                                send_to_player(player_num, "Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                                send_to_player(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
                                 continue
                             
                             coord_str, orientation_str = parts
@@ -280,154 +353,274 @@ def run_two_player_game_online(rfile1, wfile1, rfile2, wfile2):
                                     'name': ship_name,
                                     'positions': occupied_positions
                                 })
-                                send_to_player(player_num, f"{ship_name} placed successfully.")
+                                send_to_player(player_idx, f"[INFO] {ship_name} placed successfully.")
                                 placed = True
                             else:
-                                send_to_player(player_num, "Cannot place ship there. Try again.")
+                                send_to_player(player_idx, "[TIP] Cannot place ship there. Try again.")
                         except ValueError as e:
-                            send_to_player(player_num, f"Invalid input: {e}")
+                            send_to_player(player_idx, f"[TIP] Invalid input: {e}")
                         except ConnectionResetError:
                             # Player disconnected during ship placement
-                            send_to_player(other_player, "Your opponent disconnected during setup. You win!")
-                            # Set both events to allow threads to exit
-                            player1_ready.set()
-                            player2_ready.set()
+                            send_to_all_players(f"[INFO] Player {player_idx + 1} disconnected during setup.\n\n", exclude_idx=player_idx)
+                            
+                            # Mark this player as not successful
+                            setup_success[player_idx] = False
+                            
+                            # Set this player's ready event
+                            player_ready_events[player_idx].set()
                             return False
                 
                 # Show final board after all ships placed
-                send_board_to_player(player_num, player_board, True)
+                send_board_to_player(player_idx, player_idx, player_board, True)
+            
             else:
                 # Invalid placement option - ask player to try again
-                send_to_player(player_num, "Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+                send_to_player(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
                 # Recursively call the function again to get valid input
-                return setup_player_ships(player_num, player_board, player_ready_event, other_player_ready_event)
+                return setup_player_ships(player_idx)
             
-            # Signal that this player is ready and wait for the other player
-            player_ready_event.set()
-            send_to_player(player_num, f"Your ships are placed. Waiting for Player {other_player} to finish placing their ships...")
+            # Signal that this player is ready and wait for other players
+            setup_success[player_idx] = True
+            send_to_player(player_idx, f"[INFO] Your ships are placed. Waiting for other players to finish placing their ships...\n")
+            player_ready_events[player_idx].set()
             return True
             
         except ConnectionResetError:
             # Player disconnected
-            try:
-                # Notify other player if they're still connected
-                send_to_player(other_player, f"Player {player_num} disconnected during setup. You win!")
-            except:
-                pass
+            send_to_all_players(f"[INFO] Player {player_idx + 1} disconnected during setup.\n\n", exclude_idx=player_idx)
             
-            # Set both events to allow threads to exit
-            player1_ready.set()
-            player2_ready.set()
+            # Mark this player as not successful
+            setup_success[player_idx] = False
+            
+            # Set this player's ready event
+            player_ready_events[player_idx].set()
             return False
     
     # Create and start threads for each player's setup
-    p1_setup_thread = threading.Thread(
-        target=setup_player_ships,
-        args=(1, board1, player1_ready, player2_ready)
-    )
+    setup_threads = []
+    for i in range(num_players):
+        thread = threading.Thread(
+            target=setup_player_ships,
+            args=(i,)
+        )
+        setup_threads.append(thread)
+        thread.start()
     
-    p2_setup_thread = threading.Thread(
-        target=setup_player_ships,
-        args=(2, board2, player2_ready, player1_ready)
-    )
+    # Wait for all threads to complete
+    for thread in setup_threads:
+        thread.join()
     
-    p1_setup_thread.start()
-    p2_setup_thread.start()
+    # Check which players completed setup successfully
+    for i in range(num_players):
+        if not player_ready_events[i].is_set() or not setup_success[i]:
+            # Remove player from active players
+            if i in active_players:
+                active_players.remove(i)
     
-    # Wait for both threads to complete
-    p1_setup_thread.join()  # Wait for Player 1's setup thread to finish
-    p2_setup_thread.join()  # Wait for Player 2's setup thread to finish
-
-    # Check if setup was completed successfully
-    if not (player1_ready.is_set() and player2_ready.is_set()):
-        # If either event is not set, it means there was an error or timeout
-        try:
-            if player1_ready.is_set() and not player2_ready.is_set():
-                send_to_player(1, "Player 2 encountered an error. Game canceled.")
-            elif player2_ready.is_set() and not player1_ready.is_set():
-                send_to_player(2, "Player 1 encountered an error. Game canceled.")
-        except:
-            pass
+    # Check if we have enough players to continue
+    if len(active_players) < 2:
+        send_to_all_players("[INFO] Not enough players completed setup. Game canceled.\n\n")
         return
     
     # Gameplay phase
-    send_to_player(1, "GAME PHASE: All ships have been placed. Game is starting!")
-    send_to_player(2, "GAME PHASE: All ships have been placed. Game is starting!")
+    for i in active_players:
+        send_to_player(i, f"GAME PHASE: All ships have been placed. Game is starting with {len(active_players)} players!\n")
     
-    current_player = 1  # Player 1 goes first
+    # Initialize player states
+    current_player_idx = 0  # Index into active_players list
+    eliminated_players = set()
     
-    def handle_player_turn(player_num, player_board, opponent_board):
-        other_player = 3 - player_num  # If player_num is 1, other is 2; if player_num is 2, other is 1
+    def handle_player_turn(player_idx):
+        # Handle a player's turn.
+        # Args:
+        #     player_idx: Index of the player whose turn it is
+        # Returns:
+        #     True: Turn completed successfully
+        #     False: Game should end
+        #     None: Invalid move, retry
+        nonlocal active_players, eliminated_players
         
         try:
-            # Show player their own board with ships
-            send_to_player(player_num, "Your board:")
-            send_board_to_player(player_num, player_board, True)
-            # Show player their opponent's board without ships
-            send_to_player(player_num, "Opponent's board:")
-            send_board_to_player(player_num, opponent_board, False)
+            # First, show the player their own board with ships
+            send_to_player(player_idx, "Your board:")
+            send_board_to_player(player_idx, player_idx, boards[player_idx], True)
+            
+            # Show all opponent boards
+            for opponent_idx in active_players:
+                if opponent_idx != player_idx:
+                    send_to_player(player_idx, f"Player {opponent_idx + 1}'s board:")
+                    send_board_to_player(player_idx, opponent_idx, boards[opponent_idx], False)
+            
+            # Let other players know whose turn it is
+            for idx in active_players:
+                if idx != player_idx:
+                    send_to_player(idx, f"[INFO] Player {player_idx + 1}'s turn. Please wait...\n")
             
             # Player's turn to fire
-            send_to_player(player_num, "Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
-            send_to_player(other_player, "Opponent's turn. Please wait...")
+            send_to_player(player_idx, "[INFO] Your turn!\n\n [TIP] Enter a coordinate and player number to fire at (e.g., 'B5 3' to fire at B5 on Player 3's board):")
             
             # Get player's move
-            fire_coord = recv_from_player(player_num)
-            if fire_coord.lower() == 'quit':
-                send_to_player(other_player, "Your opponent forfeited. You win!")
-                return False
+            fire_input = recv_from_player(player_idx)
+            if fire_input.lower() == 'quit':
+                send_to_all_players(f"[INFO] Player {player_idx + 1} forfeited.\n", exclude_idx=player_idx)
                 
+                # Remove player from active list (with check to prevent the bug)
+                if player_idx in active_players:  # Check if player is still in the list
+                    active_players.remove(player_idx)
+                    eliminated_players.add(player_idx)
+                
+                # Check if only one player remains
+                if len(active_players) <= 1:
+                    if active_players:
+                        winner_idx = active_players[0]
+                        send_to_player(winner_idx, "[INFO] You are the last player standing. You win!")
+                    return False
+                return True
+            
             try:
-                row, col = parse_coordinate(fire_coord)
-                result, sunk_name = opponent_board.fire_at(row, col)
+                parts = fire_input.strip().split()
+                if len(parts) != 2:
+                    send_to_player(player_idx, "[TIP] Invalid format. Use 'COORDINATE PLAYER_NUMBER' (e.g., 'B5 3')")
+                    return None
                 
-                # Notify both players of the result
+                coord_str, target_player_str = parts
+                
+                # Convert target player number (1-based) to index (0-based)
+                try:
+                    target_player_num = int(target_player_str)
+                    target_player_idx = target_player_num - 1
+                    
+                    if target_player_idx == player_idx:
+                        send_to_player(player_idx, "[TIP] You cannot fire at your own board. Choose another player.\n\n")
+                        return None
+                    
+                    if target_player_idx not in active_players:
+                        send_to_player(player_idx, f"[INFO] Player {target_player_num} is not an active player. Choose another target.\n\n")
+                        return None
+                    
+                except ValueError:
+                    send_to_player(player_idx, "[INFO] Invalid player number.\n\n")
+                    return None
+                
+                # Parse coordinate and fire
+                row, col = parse_coordinate(coord_str)
+                target_board = boards[target_player_idx]
+                result, sunk_name = target_board.fire_at(row, col)
+                
+                # Notify players of the result
                 if result == 'hit':
                     if sunk_name:
-                        send_to_player(player_num, f"HIT! You sank their {sunk_name}!")
-                        send_to_player(other_player, f"Your {sunk_name} was sunk!")
+                        send_to_player(player_idx, f"\n[INFO] HIT! You sank Player {target_player_num}'s {sunk_name}!\n\n")
+                        send_to_player(target_player_idx, f"[INFO] Your {sunk_name} was sunk by Player {player_idx + 1}!\n\n")
+                        send_to_all_players(f"[INFO]Player {player_idx + 1} sank Player {target_player_num}'s {sunk_name}!\n\n", 
+                                           exclude_idx=[player_idx, target_player_idx])
                     else:
-                        send_to_player(player_num, "HIT!")
-                        send_to_player(other_player, f"Your ship at {fire_coord} was hit!")
+                        send_to_player(player_idx, f"\n[INFO] HIT on Player {target_player_num}'s ship!\n\n")
+                        send_to_player(target_player_idx, f"[INFO] Your ship at {coord_str} was hit by Player {player_idx + 1}!\n\n")
+                        send_to_all_players(f"[INFO] Player {player_idx + 1} hit Player {target_player_num}'s ship!\n\n", 
+                                           exclude_idx=[player_idx, target_player_idx])
                     
-                    # Check if this player won
-                    if opponent_board.all_ships_sunk():
-                        send_to_player(player_num, "Congratulations! You've sunk all your opponent's ships. You win!")
-                        send_to_player(other_player, "All your ships have been sunk. Game over!")
-                        return False
+                    # Check if target player is eliminated
+                    if target_board.all_ships_sunk():
+                        send_to_player(player_idx, f"\n[INFO] You've sunk all of Player {target_player_num}'s ships!\n\n")
+                        send_to_player(target_player_idx, "[INFO] All your ships have been sunk. You are eliminated!\n\n")
+                        send_to_all_players(f"[INFO] Player {target_player_num} has been eliminated by Player {player_idx + 1}!\n\n", 
+                                           exclude_idx=[player_idx, target_player_idx])
+                        
+                        # Remove the eliminated player (with check to prevent the bug)
+                        if target_player_idx in active_players:  # Check if player is still in the list
+                            active_players.remove(target_player_idx)
+                            eliminated_players.add(target_player_idx)
+                        
+                        # Check if only one player remains
+                        if len(active_players) <= 1:
+                            if active_players:
+                                winner_idx = active_players[0]
+                                send_to_player(winner_idx, "[INFO] You are the last player standing. You win!\n\n")
+                                send_to_all_players(f"[INFO] Player {winner_idx + 1} wins the game!\n", exclude_idx=winner_idx)
+                            return False
+                    
                 elif result == 'miss':
-                    send_to_player(player_num, "MISS!")
-                    send_to_player(other_player, f"Your opponent fired at {fire_coord} and missed.")
+                    send_to_player(player_idx, f"\n[INFO] MISS on Player {target_player_num}'s board!\n")
+                    send_to_player(target_player_idx, f"[INFO] Player {player_idx + 1} fired at {coord_str} and missed.\n")
+                    send_to_all_players(f"[INFO] Player {player_idx + 1} missed when firing at Player {target_player_num}!\n", 
+                                       exclude_idx=[player_idx, target_player_idx])
+                
                 elif result == 'already_shot':
-                    send_to_player(player_num, "You've already fired at that location. Try again.")
-                    # Return None to indicate we should retry with the same player
+                    send_to_player(player_idx, f"\n[INFO]You've already fired at that location on Player {target_player_num}'s board. Try again.\n")
                     return None
+            
             except ValueError as e:
-                send_to_player(player_num, f"Invalid input: {e}")
-                # Return None to indicate we should retry with the same player
+                send_to_player(player_idx, f"\n[TIP] Invalid input: {e}\n")
                 return None
             
-            # Return True to indicate successful turn completion
             return True
 
         except ConnectionResetError:
             # Handle player disconnection
-            send_to_player(other_player, "Your opponent forfeited")
-            return False
+            send_to_all_players(f"[INFO] Player {player_idx + 1} disconnected during their turn.\n\n", exclude_idx=player_idx)
+            
+            # Remove player from active list
+            if player_idx in active_players:
+                active_players.remove(player_idx)
+                eliminated_players.add(player_idx)
+            
+            # Check if only one player remains
+            if len(active_players) <= 1:
+                if active_players:
+                    winner_idx = active_players[0]
+                    send_to_player(winner_idx, "[INFO] You are the last player standing. You win!\n\n")
+                    send_to_all_players(f"[INFO] Player {winner_idx + 1} wins the game!\n\n", exclude_idx=winner_idx)
+                return False
+            
+            return True
     
-    while True:
-        if current_player == 1:
-            result = handle_player_turn(1, board1, board2)
-        else:
-            result = handle_player_turn(2, board2, board1)
+    # Main game loop
+    while len(active_players) > 1:
+        current_idx = active_players[current_player_idx]
+        result = handle_player_turn(current_idx)
         
         # Check the result of the turn
         if result is False:
-            # Game ended (someone quit or won)
+            # Game ended
             break
         elif result is None:
             # Invalid move, retry with the same player
             continue
         else:
-            # Valid move, switch to the other player
-            current_player = 3 - current_player
+            # Additional check for active players after a successful turn
+            if len(active_players) <= 1:
+                # Game ended - only one or zero players left
+                if active_players:
+                    winner_idx = active_players[0]
+                    send_to_player(winner_idx, "[INFO] You are the last player standing. You win!\n\n")
+                break
+            
+            # Move to the next player
+            current_player_idx = (current_player_idx + 1) % len(active_players)    
+    # Game has ended, notify any remaining players
+    for idx in active_players:
+        send_to_player(idx, "[INFO] Game has ended.\n")
+
+# Helper function to initialize the game with n players
+def initialise_multiplayer_game(n_players, socket_list):
+    # Initialise a multiplayer game with n players.
+    # Args:
+    #     n_players: Number of players
+    #     socket_list: List of connected client sockets
+    if len(socket_list) < n_players:
+        raise ValueError("[INFO] Not enough connected clients\n\n")
+    
+    player_rfiles = []
+    player_wfiles = []
+    
+    # Set up file objects for each player
+    for i in range(n_players):
+        client_socket = socket_list[i]
+        rfile = client_socket.makefile('r')
+        wfile = client_socket.makefile('w')
+        player_rfiles.append(rfile)
+        player_wfiles.append(wfile)
+    
+    # Start the game
+    run_multiplayer_game_online(player_rfiles, player_wfiles)
