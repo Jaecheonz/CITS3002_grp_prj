@@ -289,7 +289,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
     for i in range(num_players):
         send_to_player(i, f"[INFO] SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
     
-    # Using threading Event objects to synchronize the players
+    # Using threading Event objects to synchronise the players
     player_ready_events = [threading.Event() for _ in range(num_players)]
     setup_success = [False] * num_players  # Track whether each player completed setup successfully
     
@@ -426,7 +426,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
     for i in active_players:
         send_to_player(i, f"GAME PHASE: All ships have been placed. Game is starting with {len(active_players)} players!\n")
     
-    # Initialize player states
+    # Initialise player states
     current_player_idx = 0  # Index into active_players list
     eliminated_players = set()
     
@@ -602,7 +602,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
     for idx in active_players:
         send_to_player(idx, "[INFO] Game has ended.\n")
 
-# Helper function to initialize the game with n players
+# Helper function to initialise the game with n players
 def initialise_multiplayer_game(n_players, socket_list):
     # Initialise a multiplayer game with n players.
     # Args:
