@@ -14,7 +14,7 @@ PORT = 5000
 # Configuration
 MIN_PLAYERS = 2  # Minimum players needed to start a game
 MAX_PLAYERS = 8  # Maximum players allowed in a game
-GAME_START_DELAY = 10  # Seconds to wait after minimum players join before starting
+GAME_START_DELAY = 5  # Seconds to wait after minimum players join before starting
 
 # Global variables to track connections
 player_connections = []
@@ -23,15 +23,14 @@ game_in_progress = False
 game_in_progress_lock = threading.Lock()
 game_ready_event = threading.Event()
 
-# Fix for the handle_client function in server.py
+# Add a global set to track players who have voted to start
+start_votes = set()
 
 def handle_client(conn, addr):
-    # Handle a client connection by adding it to the player_connections list.
-    # This function runs in its own thread for each client.
-    global game_in_progress, player_connections
-    
+    global game_in_progress, player_connections, start_votes
+
     print(f"[INFO] New connection from {addr}\n")
-    
+
     try:
         with connection_lock:
             if game_in_progress:
@@ -63,40 +62,16 @@ def handle_client(conn, addr):
             if player_num < MIN_PLAYERS:
                 wfile.write(f"[INFO] Waiting for at least {MIN_PLAYERS - player_num} more player(s) to connect...\n\n")
             
+            wfile.write("[TIP] Type 'start' when you are ready to begin the game.\n")
             wfile.write("[TIP] Type 'quit' to exit.\n\n")
             wfile.flush()
             
             # Add connection to our list with all necessary info
             player_connections.append((conn, addr, rfile, wfile, player_num))
             
-            # Check if we have enough players to start a game
-            if len(player_connections) >= MIN_PLAYERS and not game_in_progress:
-                # We have minimum players, announce game will start soon
-                for _, _, _, wf, _ in player_connections:
-                    wf.write(f"[INFO] Minimum player count reached! Game will start in {GAME_START_DELAY} seconds.\n\n")
-                    wf.write(f"[INFO] Currently {len(player_connections)} player(s) connected. Maximum is {MAX_PLAYERS}.\n\n")
-                    wf.write("[INFO] More players can still join before the game starts.\n\n")
-                    wf.flush()
-                
-                # Start a countdown timer in a new thread
-                start_timer_thread = threading.Thread(target=start_game_countdown)
-                start_timer_thread.daemon = True
-                start_timer_thread.start()
-    
     except Exception as e:
         print(f"[ERROR] Connection error: {e}\n\n")
-        # If anything goes wrong, clean up player connection
-        with connection_lock:
-            # Remove this player from connections if they're there
-            for i, (c, _, _, _, _) in enumerate(player_connections):
-                if c == conn:
-                    del player_connections[i]
-                    break
-        
-        try:
-            conn.close()
-        except:
-            pass
+        cleanup_connection(conn)
         return
         
     # Keep connection open and check for commands while waiting for game to start
@@ -106,45 +81,33 @@ def handle_client(conn, addr):
             # Make the socket non-blocking for reading with timeout
             ready, _, _ = select.select([conn], [], [], 0.5)
             if ready:
-                cmd = rfile.readline().strip().upper()
-                if cmd == 'QUIT':
+                cmd = rfile.readline().strip().lower()
+                if cmd == 'quit':
                     print(f"[INFO] Player {player_num} has quit while waiting.\n\n")
-                    # Clean up connection
+                    cleanup_connection(conn)
+                    return
+                elif cmd == 'start':
                     with connection_lock:
-                        to_remove = None
-                        for i, (c, _, _, _, _) in enumerate(player_connections):
-                            if c == conn:
-                                to_remove = i
-                                break
+                        start_votes.add(player_num)
+                        print(f"[INFO] Player {player_num} voted to start. ({len(start_votes)}/{len(player_connections)} votes)\n")
                         
-                        if to_remove is not None:
-                            del player_connections[to_remove]
+                        # Notify all players of the current vote count
+                        for _, _, _, wf, _ in player_connections:
+                            wf.write(f"[INFO] Player {player_num} voted to start. ({len(start_votes)}/{len(player_connections)} votes)\n\n")
+                            wf.flush()
                         
-                        # If we fall below minimum players, cancel the countdown
-                        if len(player_connections) < MIN_PLAYERS:
-                            game_ready_event.clear()
-                            
-                            # Notify remaining players
-                            for _, _, _, wf, pnum in player_connections:
-                                wf.write("[INFO] Not enough players left. Game start cancelled.\n\n")
-                                wf.write("[INFO] Disconnecting all remaining players. Please reconnect.\n]n")
+                        # Check if all players have voted to start
+                        if len(start_votes) == len(player_connections):
+                            print("[INFO] All players have voted to start. Initiating countdown...\n")
+                            for _, _, _, wf, _ in player_connections:
+                                wf.write("[INFO] All players have voted to start. Game will begin shortly.\n\n")
                                 wf.flush()
                             
-                            # Make a copy of the connection list before modifying it
-                            connections_to_close = player_connections.copy()
-                            
-                            # Clear the player_connections list to reset player numbers
-                            player_connections.clear()
-                            
-                            # Close all remaining connections
-                            for c, _, _, _, _ in connections_to_close:
-                                try:
-                                    c.close()
-                                except:
-                                    pass
-                    
-                    conn.close()
-                    return
+                            # Start the countdown timer in a new thread
+                            start_timer_thread = threading.Thread(target=start_game_countdown)
+                            start_timer_thread.daemon = True
+                            start_timer_thread.start()
+                            waiting_for_game = False
             
             # Check if the game is starting (indicated by the event)
             if game_ready_event.is_set():
@@ -152,46 +115,47 @@ def handle_client(conn, addr):
             
     except Exception as e:
         print(f"[INFO] Player {player_num} disconnected while waiting: {e}\n\n")
-        with connection_lock:
-            to_remove = None
-            for i, (c, _, _, _, _) in enumerate(player_connections):
-                if c == conn:
-                    to_remove = i
-                    break
-            
-            if to_remove is not None:
-                del player_connections[to_remove]
-            
-            # If we fall below minimum players, cancel the countdown
-            if len(player_connections) < MIN_PLAYERS:
-                game_ready_event.clear()
-                
-                # Notify remaining players
-                for _, _, _, wf, _ in player_connections:
-                    wf.write("[INFO] Not enough players left. Game start cancelled.\n\n")
-                    wf.write("[INFO] Disconnecting all remaining players. Please reconnect.\n\n")
-                    wf.flush()
-                
-                # Make a copy of the connection list before modifying it
-                connections_to_close = player_connections.copy()
-                
-                # Clear the player_connections list to reset player numbers
-                player_connections.clear()
-                
-                # Close all remaining connections
-                for c, _, _, _, _ in connections_to_close:
-                    try:
-                        c.close()
-                    except:
-                        pass
-        
-        try:
-            conn.close()
-        except:
-            pass
+        cleanup_connection(conn)
         return
 
-# Fix for the start_game_countdown function in server.py
+def cleanup_connection(conn):
+    # Helper function to clean up a player's connection
+    global player_connections, start_votes
+    with connection_lock:
+        to_remove = None
+        for i, (c, _, _, _, player_num) in enumerate(player_connections):
+            if c == conn:
+                to_remove = i
+                break
+        
+        if to_remove is not None:
+            _, _, _, _, player_num = player_connections[to_remove]
+            del player_connections[to_remove]
+            start_votes.discard(player_num)  # Remove their vote if they disconnect
+        
+        # If we fall below minimum players, cancel the countdown
+        if len(player_connections) < MIN_PLAYERS:
+            game_ready_event.clear()
+            
+            # Notify remaining players
+            for _, _, _, wf, _ in player_connections:
+                wf.write("[INFO] Not enough players left. Game start cancelled.\n\n")
+                wf.flush()
+            
+            # Clear the player_connections list to reset player numbers
+            player_connections.clear()
+            
+            # Close all remaining connections
+            for c, _, _, _, _ in player_connections:
+                try:
+                    c.close()
+                except:
+                    pass
+    
+    try:
+        conn.close()
+    except:
+        pass
 
 def start_game_countdown():
     # Count down for GAME_START_DELAY seconds, then start the game
@@ -280,8 +244,6 @@ def start_game_countdown():
     )
     game_thread.daemon = True
     game_thread.start()
-
-# Fix for the run_game_session function in server.py
 
 def run_game_session(player_connections):
     # Run a game session with all connected players.

@@ -444,13 +444,15 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             # First, show the player their own board with ships
             send_to_player(player_idx, "Your board:")
             send_board_to_player(player_idx, player_idx, boards[player_idx], True)
+            send_to_player('/n')
             
             # Show all opponent boards
             for opponent_idx in active_players:
                 if opponent_idx != player_idx:
                     send_to_player(player_idx, f"Player {opponent_idx + 1}'s board:")
                     send_board_to_player(player_idx, opponent_idx, boards[opponent_idx], False)
-            
+                    send_to_player('/n')
+                    
             # Let other players know whose turn it is
             for idx in active_players:
                 if idx != player_idx:

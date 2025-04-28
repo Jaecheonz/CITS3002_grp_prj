@@ -5,7 +5,7 @@
 import socket
 import threading
 import os
-import re
+import time
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -59,6 +59,7 @@ def receive_messages(rfile):
                 print("\n[INFO] Game has ended. Exiting...\n")
                 running = False
                 # Force exit to terminate all threads
+                time.sleep(3)
                 os._exit(0)
                 
             # Detect forfeit/disconnect messages
@@ -74,6 +75,7 @@ def receive_messages(rfile):
         print(f"[ERROR] Exception in receive thread: {e}")
         running = False
         # Force exit on exception
+        time.sleep(3)
         os._exit(1)
 
 def main():
@@ -119,3 +121,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
