@@ -224,9 +224,9 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
         elif not isinstance(exclude_idx, list):
             exclude_idx = [exclude_idx]
             
-        for i in active_players:
-            if i not in exclude_idx:
-                send_to_player(i, msg)
+        for idx in active_players:
+            if idx not in exclude_idx:
+                send_to_player(idx, msg)
     
     def send_board_to_player(player_idx, target_board_idx, board, show_hidden=False):
         # Send a board state to a player.
@@ -286,8 +286,8 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
     active_players = list(range(num_players))
     
     # Setup phase - let all players place their ships concurrently using threads
-    for i in range(num_players):
-        send_to_player(i, f"[INFO] SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
+    for idx in range(num_players):
+        send_to_player(idx, f"[INFO] SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
     
     # Using threading Event objects to synchronise the players
     player_ready_events = [threading.Event() for _ in range(num_players)]
@@ -423,8 +423,8 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
         return
     
     # Gameplay phase
-    for i in active_players:
-        send_to_player(i, f"GAME PHASE: All ships have been placed. Game is starting with {len(active_players)} players!\n")
+    for idx in active_players:
+        send_to_player(idx, f"GAME PHASE: All ships have been placed. Game is starting with {len(active_players)} players!\n")
     
     # Initialise player states
     current_player_idx = 0  # Index into active_players list
@@ -444,14 +444,12 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             # First, show the player their own board with ships
             send_to_player(player_idx, "Your board:")
             send_board_to_player(player_idx, player_idx, boards[player_idx], True)
-            send_to_player('/n')
             
             # Show all opponent boards
             for opponent_idx in active_players:
                 if opponent_idx != player_idx:
                     send_to_player(player_idx, f"Player {opponent_idx + 1}'s board:")
                     send_board_to_player(player_idx, opponent_idx, boards[opponent_idx], False)
-                    send_to_player('/n')
                     
             # Let other players know whose turn it is
             for idx in active_players:
@@ -599,7 +597,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                 break
             
             # Move to the next player
-            current_player_idx = (current_player_idx + 1) % len(active_players)    
+            current_player_idx = (current_player_idx + 1) % len(active_players)
     # Game has ended, notify any remaining players
     for idx in active_players:
         send_to_player(idx, "[INFO] Game has ended.\n")
