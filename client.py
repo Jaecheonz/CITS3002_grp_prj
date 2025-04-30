@@ -64,8 +64,8 @@ def receive_messages(rfile):
                 
             # Detect forfeit/disconnect messages
             if any(phrase in line for phrase in [
-                "forfeited", 
-                "disconnected", 
+                "forfeited",
+                "disconnected",
                 "Not enough players"
             ]):
                 # Don't exit immediately as the game might continue with other players

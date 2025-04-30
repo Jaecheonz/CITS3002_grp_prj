@@ -14,7 +14,7 @@ PORT = 5000
 # Configuration
 MIN_PLAYERS = 2  # Minimum players needed to start a game
 MAX_PLAYERS = 8  # Maximum players allowed in a game
-GAME_START_DELAY = 30  # Seconds to wait after minimum players join before starting
+GAME_START_DELAY = 8  # Seconds to wait after minimum players join before starting
 
 # Global variables to track connections
 player_connections = []
