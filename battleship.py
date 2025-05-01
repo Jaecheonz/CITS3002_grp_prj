@@ -540,12 +540,16 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                     # Wait for placement input with a short timeout to keep timer accurate
                     placement = recv_from_player(player_idx, timeout=min(remaining_time, 0.1))
                     
-                    # check if any other player has forfeited
-                    if any(success is False for idx, success in enumerate(setup_success) if idx != player_idx):
-                        send_to_player(player_idx, "[INFO] Another player has forfeited during setup. Game cannot continue.\n")
-                        setup_success[player_idx] = False
-                        player_ready_events[player_idx].set()
-                        return False
+                    # check if opponent has forfeited
+                    for idx, success in enumerate(setup_success):
+                        if idx == player_idx:
+                            continue
+
+                        if success is False:
+                            send_to_player(player_idx, "[INFO] Opponent has forfeited during setup. Game cannot continue.\n")
+                            setup_success[player_idx] = False
+                            player_ready_events[player_idx].set()
+                            return False
 
                     # If we got no input, continue the loop to check time again
                     if placement is None:
