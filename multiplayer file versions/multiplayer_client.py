@@ -1,5 +1,5 @@
 # client.py
-# Connects to a Battleship server which runs the 2-player Battleship game with spectators.
+# Connects to a Battleship server which runs the N-player Battleship game.
 # Uses threading to separate receiving server messages and sending user input.
 
 import socket
@@ -14,12 +14,10 @@ PORT = 5000
 running = True
 # Variable to track the game phase
 game_phase = "setup"  # Can be "setup" or "gameplay"
-# Variable to track if user is a player or spectator
-is_spectator = False
 
 def receive_messages(rfile):
     # Continuously receive and display messages from the server
-    global running, game_phase, is_spectator
+    global running, game_phase
     try:
         while running:
             line = rfile.readline()
@@ -29,11 +27,6 @@ def receive_messages(rfile):
                 break
                 
             line = line.strip()
-            
-            # Check if user is a spectator
-            if any(phrase in line for phrase in ["connected as spectator", "joining as spectator"]):
-                is_spectator = True
-                print("[INFO] You joined as a spectator.\n")
             
             # Check for phase transition
             if "GAME PHASE" in line:
@@ -53,58 +46,48 @@ def receive_messages(rfile):
                 # Normal message
                 print(line)
                 
-            # Check for game end messages - now handles both player and spectator scenarios
+            # Check for game end messages
             if any(phrase in line for phrase in [
                 "Game has ended", 
                 "Game canceled",
-                "Game start canceled",
+                "Game start canceled" 
                 "You win!", 
-                "You lose!",
+                "You are eliminated",
                 "wins the game",
-                "Player 1 wins",
-                "Player 2 wins"
+                "You are the last player standing"
             ]):
-                print("\n[INFO] Game has ended.")
-                if is_spectator:
-                    print("[INFO] You may disconnect with 'quit' or continue watching post-game chat.\n")
-                else:
-                    print("[INFO] Game complete. You may disconnect with 'quit'.\n")
-                # Don't automatically exit - allow player to quit manually
-                
-            # Handle active player disconnect/forfeit differently than spectator disconnect
-            if "forfeited" in line or "disconnected" in line:
-                # Check if one of the two active players left
-                if any(player in line for player in ["Player 1", "Player 2"]):
-                    if is_spectator:
-                        print("\n[INFO] An active player has left the game.")
-                    else:
-                        # If we're a player and the other player left, we win
-                        print("\n[INFO] The other player has left the game.")
-                        
-            # Handle not enough players scenario
-            if "Not enough players" in line:
-                print("\n[INFO] Not enough active players to continue. Game will end.\n")
+                print("\n[INFO] Game has ended. Exiting...\n")
                 running = False
-                time.sleep(2)
+                # Force exit to terminate all threads
+                time.sleep(3)
                 os._exit(0)
+                
+            # Detect forfeit/disconnect messages
+            if any(phrase in line for phrase in [
+                "forfeited",
+                "disconnected",
+                "Not enough players"
+            ]):
+                # Don't exit immediately as the game might continue with other players
+                print("\n[INFO] A player has left the game.")
                 
     except Exception as e:
         print(f"[ERROR] Exception in receive thread: {e}")
         running = False
-        # Don't force exit immediately - let main thread handle it
-        time.sleep(1)
+        # Force exit on exception
+        time.sleep(3)
+        os._exit(1)
 
 def main():
-    global running, game_phase, is_spectator
+    global running, game_phase
     running = True
     game_phase = "setup"
-    is_spectator = False
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.connect((HOST, PORT))
             print(f"[INFO] Connected to server at {HOST}:{PORT}\n")
-            print("[INFO] Waiting for the game to start...\n")
+            print("[INFO] Waiting for the game to start with enough players...\n")
             
             rfile = s.makefile('r')
             wfile = s.makefile('w')
@@ -118,10 +101,8 @@ def main():
             while running:
                 user_input = input("")
 
-                # Only send if still connected
-                if running:
-                    wfile.write(user_input + '\n')
-                    wfile.flush()
+                wfile.write(user_input + '\n')
+                wfile.flush()
                 
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.\n")
@@ -137,10 +118,7 @@ def main():
         finally:
             running = False
             print("[INFO] Disconnected from server.\n")
-            # Give time for any remaining messages to display
-            time.sleep(1)
-            # Clean exit
-            os._exit(0)
 
 if __name__ == "__main__":
     main()
+    
