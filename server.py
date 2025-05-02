@@ -404,7 +404,6 @@ def run_game_session(player_connections):
 def main():
     print(f"[INFO] Server listening on {HOST}:{PORT}\n")
     print(f"[INFO] Minimum players required: {MIN_PLAYERS}\n")
-    print(f"[INFO] Maximum players allowed: {MAX_PLAYERS}\n")
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         # Set socket options to allow reuse of address

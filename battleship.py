@@ -761,6 +761,3 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             
         # Move to the next player
         current_player_idx = (active_players.index(current_idx) + 1) % len(active_players)
-
-    # Game has ended, notify any remaining players
-    send_to_all_players("[INFO] Game has ended.", include_spectators=True)
