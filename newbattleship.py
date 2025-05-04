@@ -396,6 +396,8 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 print(f"[ERROR] Select error: {e}")
                 time.sleep(0.1)
 
+    player_buffers = ["", ""]
+
     def recv_from_connection(conn_idx, timeout=None):
         try:
             # Check if there's data available to read without blocking
@@ -405,7 +407,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 if not readable:
                     return None  # Timeout occurred, no data available
             
-            # Read the line
+            # Read the line from the file-like object (not from socket)
             line = player_rfiles[conn_idx].readline()
             if not line:  # Empty string indicates disconnection
                 raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected\n\n")
@@ -450,6 +452,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             ships_to_place = list(SHIPS)  # Make a copy of the ships list
             manual_placement_started = False
             waiting_for_placement_input = False
+            first_placement = True
             
             while True:
                 # Check if we're out of time
@@ -474,7 +477,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 # wait for initial placement choice (RANDOM/MANUAL)
                 if not manual_placement_started and not waiting_for_placement_input:
                     waiting_for_placement_input = True
-                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))  # Poll every 5 seconds max
+                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))
                     waiting_for_placement_input = False
                     
                     # If we got no input, continue the loop to check time again
@@ -520,12 +523,27 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                     ship_name, ship_size = ships_to_place[current_ship_index]
                     
                     # Show current board state
-                    send_board_to_connection(player_idx, player_idx, player_board, True)
-                    send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                    if first_placement:
+                        send_board_to_connection(player_idx, player_idx, player_board, True)
+                        send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                        first_placement = False
                     
+                    opponent_idx = 1 - player_idx
+                    try:
+                        readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
+                        if readable:
+                            opponent_line = player_rfiles[opponent_idx].readline()
+                            if not opponent_line:
+                                raise ConnectionResetError()
+                    except (ConnectionResetError, OSError):
+                        send_to_connection(player_idx, "[ALERT] Your opponent has disconnected. Setup aborted.\n\n")
+                        setup_success[player_idx] = False
+                        player_ready_events[player_idx].set()
+                        return False
+    
                     # Wait for placement input with timeout
                     waiting_for_placement_input = True
-                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))  # Poll every 5 seconds max
+                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))  # Poll every 5 seconds max
                     waiting_for_placement_input = False
                     
                     # If we got no input, continue the loop to check time again
