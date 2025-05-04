@@ -528,6 +528,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                         send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
                         first_placement = False
                     
+                    # use select to check the opponent's socket for disconnections
                     opponent_idx = 1 - player_idx
                     try:
                         readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)

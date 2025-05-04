@@ -6,7 +6,7 @@ import socket
 import threading
 import select
 import time
-from newbattleship import run_multiplayer_game_online
+from battleship import run_multiplayer_game_online
 
 HOST = '127.0.0.1'
 PORT = 5000
