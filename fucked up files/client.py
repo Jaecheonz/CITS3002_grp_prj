@@ -79,8 +79,8 @@ def receive_messages(rfile):
                         print("\n[INFO] An active player has left the game.")
                     else:
                         # If we're a player and the other player left, we win
-                        print("\n[INFO] The other player has left the game. You win!\n")
-                        return False
+                        print("\n[INFO] The other player has left the game.")
+                        
             # Handle not enough players scenario
             if "Not enough players" in line:
                 print("\n[INFO] Not enough active players to continue. Game will end.\n")
@@ -125,6 +125,12 @@ def main():
                 
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.\n")
+                    if running:
+                        try:
+                            wfile.write('quit\n')  # <--- explicitly notify server
+                            wfile.flush()
+                        except:
+                            pass
                     running = False
                     break
                     

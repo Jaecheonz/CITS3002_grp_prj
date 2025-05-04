@@ -16,7 +16,7 @@ MIN_PLAYERS = 2  # Minimum players needed to start a game
 MAX_PLAYERS = 2  # Maximum active players allowed (exactly 2)
 MAX_SPECTATORS = 6  # Maximum spectators allowed
 TOTAL_CONNECTIONS = MAX_PLAYERS + MAX_SPECTATORS  # Total connections allowed
-GAME_START_DELAY = 8  # Seconds to wait after minimum players join before starting
+GAME_START_DELAY = 1  # Seconds to wait after minimum players join before starting
 
 # Global variables to track connections
 player_connections = []

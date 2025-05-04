@@ -183,25 +183,27 @@ def parse_coordinate(coord_str):
 
     return (row, col)
 
-def run_multiplayer_game_online(player_rfiles, player_wfiles):
-    # Run a Battleship game with n players.
-    # Args:
-    #     player_rfiles: List of read file objects for each player
-    #     player_wfiles: List of write file objects for each player
-    num_players = len(player_rfiles)
-    if num_players < 2:
-        raise ValueError("At least 2 players required")
-    # Define active players (first two players) and spectators (everyone else)
-    active_players = list(range(min(2, num_players)))  # First two players
-    spectator_players = list(range(2, num_players))  # Everyone else
-
-    def send_to_player(player_idx, msg):
-        # Send a message to a specific player.
-        if player_idx not in active_players:
-            return False
-            
+def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=None):
+    """
+    Run a Battleship game with 2 players and optional spectators.
+    
+    Args:
+        player_rfiles: List of read file objects for players/spectators
+        player_wfiles: List of write file objects for players/spectators
+    """
+    total_connections = len(player_rfiles)
+    if total_connections < 2:
+        raise ValueError("At least 2 connections required")
+    
+    # First two connections will be players, rest are spectators
+    num_players = 2
+    player_indices = [0, 1]  # Fixed player indices
+    spectator_indices = list(range(2, total_connections))
+    
+    def send_to_connection(conn_idx, msg):
+        # Send a message to a specific connection (player or spectator)
         try:
-            wfile = player_wfiles[player_idx]
+            wfile = player_wfiles[conn_idx]
             # Check if the file is still valid/open
             if wfile.closed:
                 raise BrokenPipeError("File already closed")
@@ -210,74 +212,53 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             wfile.flush()
             return True
         except (BrokenPipeError, ConnectionError, ConnectionResetError, IOError) as e:
-            handle_player_disconnect(player_idx)
+            print(f"[ERROR] Failed to send message to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
+            
+            # Handle disconnection based on if it's a player or spectator
+            if conn_idx in player_indices:
+                player_indices.remove(conn_idx)
+                send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
+            elif conn_idx in spectator_indices:
+                spectator_indices.remove(conn_idx)
+            
             return False
     
-    def send_to_all_spectators(msg):
-        for idx in spectator_players:
-            send_to_player(idx, msg)
-
-    def update_spectators_game_state():
-        for spec_idx in spectator_players:
-            send_to_player(spec_idx, "[INFO] Current game state:")
-            for active_idx in active_players:
-                send_board_to_player(spec_idx, active_idx, boards[active_idx], False)
-    
-    def handle_player_disconnect(player_idx):
-        if player_idx in active_players:
-            other_player_idx = active_players[0] if player_idx == active_players[1] else active_players[1]
-            send_to_player(other_player_idx, f"[INFO] Player {player_idx + 1} disconnected. You win!\n\n")
-            send_to_all_spectators(f"[INFO] Player {player_idx + 1} disconnected. Player {other_player_idx + 1} wins!\n\n")
-            send_to_all_players("[INFO] Game has ended.", include_spectators=True)
-            return False  # Signal game end
-        
-        elif player_idx in spectator_players:
-            spectator_players.remove(player_idx)
-            # Notify other spectators about spectator disconnection
-            send_to_all_spectators(f"[INFO] A spectator (Player {player_idx + 1}) has disconnected.\n")
-        
-        return True  # Continue game
-
-    # Inform each player of their role
-    for idx in active_players:
-        send_to_player(idx, f"[INFO] You are Player {idx + 1} (Active player)\n")
-    for idx in spectator_players:
-        send_to_player(idx, f"[INFO] You are a spectator. You can watch the game but cannot participate.\n")
-    
-    # Modify send_to_all_players to include a parameter for spectators:
-    def send_to_all_players(msg, exclude_idx=None, include_spectators=True):
-        # Send to active players
+    def send_to_all_others(msg, exclude_idx=None):
+        # Send a message to all connections except excluded ones
         if exclude_idx is None:
             exclude_idx = []
         elif not isinstance(exclude_idx, list):
             exclude_idx = [exclude_idx]
             
-        for idx in active_players:
+        # Send to active players first
+        for idx in player_indices:
             if idx not in exclude_idx:
-                send_to_player(idx, msg)
+                send_to_connection(idx, msg)
         
-        # Send to spectators if specified
-        if include_spectators:
-            for idx in spectator_players:
-                if idx not in exclude_idx:
-                    send_to_player(idx, msg)
+        # Then send to spectators
+        for idx in spectator_indices:
+            if idx not in exclude_idx:
+                send_to_connection(idx, msg)
     
-    def send_board_to_player(player_idx, target_board_idx, board, show_hidden=False):
-        # Send a board state to a player.
-        # Args:
-        #     player_idx: Index of the player to send the board to
-        #     target_board_idx: Index of the board to display
-        #     board: The board object
-        #     show_hidden: Whether to show hidden ships
-        if player_idx not in active_players:
-            return False  # Don't send to inactive players
-            
+    def send_to_spectators(msg):
+        # Helper function to send message only to spectators
+        for idx in spectator_indices:
+            send_to_connection(idx, msg)
+    
+    def send_board_to_connection(conn_idx, board_idx, board, show_hidden=False):
+        # Send a board state to a connection
         try:
-            wfile = player_wfiles[player_idx]
+            wfile = player_wfiles[conn_idx]
             
-            # Determine if this is the player's own board or another player's board
-            is_own_board = player_idx == target_board_idx
-            board_owner = "Your" if is_own_board else f"Player {target_board_idx + 1}'s"
+            # Determine if this is the player's own board or opponent's board
+            is_own_board = conn_idx == board_idx
+            
+            if conn_idx in player_indices:
+                # This is a player
+                board_owner = "Your" if is_own_board else "Opponent's"
+            else:
+                # This is a spectator
+                board_owner = f"Player {board_idx + 1}'s"
             
             wfile.write(f"{board_owner} Grid:\n")
             
@@ -297,15 +278,20 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             wfile.flush()
             return True
         except (BrokenPipeError, ConnectionError) as e:
-            handle_player_disconnect(player_idx)
+            print(f"[ERROR] Failed to send board to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
+            
+            # Handle disconnection
+            if conn_idx in player_indices:
+                player_indices.remove(conn_idx)
+                send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
+            elif conn_idx in spectator_indices:
+                spectator_indices.remove(conn_idx)
+            
             return False
     
     def handle_input_during_turn(player_idx, turn_timeout=15):
-        nonlocal current_turn_player
-        
-        # Keep track of which players have already been warned
-        # so we only warn them once per turn
-        warned_players = set()
+        # Keep track of which connections have already been warned
+        warned_connections = set()
 
         # Timer variables
         start_time = time.time()
@@ -315,7 +301,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
         reminders_sent = set()  # Keep track of which reminders have been sent
 
         # Send initial timer message
-        send_to_player(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
+        send_to_connection(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
 
         while True:
             # Update timer
@@ -324,117 +310,123 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             
             # Check if time has expired
             if time_remaining == 0:
-                send_to_player(player_idx, "[INFO] Time expired! You did not enter a coordinate, giving up your turn.")
-                send_to_all_players(f"[INFO] Player {player_idx + 1} timed out and gave up their turn.", exclude_idx=player_idx)
+                send_to_connection(player_idx, "[INFO] Time expired! You did not enter a coordinate, giving up your turn.")
+                send_to_all_others(f"[INFO] Player {player_idx + 1} timed out and gave up their turn.", exclude_idx=player_idx)
                 return "timeout"  # Return a special value to indicate timeout
             
-            # Define reminder thresholds based on turn_timeout
+            # Define reminder thresholds
             reminder_thresholds = [10, 5]  # Default reminders for 15s timer
             
             # Send reminders at appropriate times
             for threshold in reminder_thresholds:
                 if time_remaining <= threshold and threshold not in reminders_sent:
-                    send_to_player(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
+                    send_to_connection(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
                     reminders_sent.add(threshold)
                     break  # Only send one reminder at a time
 
             # Get list of file descriptors to check
             read_list = []
-            fd_to_player = {}  # Map file descriptors to player indices
+            fd_to_conn = {}  # Map file descriptors to connection indices
             
-            # Collect valid file descriptors and map them to player indices
-            for i in active_players + spectator_players:  # Include spectators in our check
+            # Collect valid file descriptors for all connections
+            all_connections = player_indices + spectator_indices
+            for i in all_connections:
                 try:
                     fd = player_rfiles[i].fileno()
                     if fd >= 0:  # Check if it's a valid file descriptor
                         read_list.append(fd)
-                        fd_to_player[fd] = i
+                        fd_to_conn[fd] = i
                 except (ValueError, IOError):
                     # File descriptor is invalid or closed
-                    handle_player_disconnect(i)
-                    return False
+                    if i in player_indices:
+                        player_indices.remove(i)
+                        send_to_all_others(f"[INFO] Player {i + 1} disconnected from the game.\n\n", exclude_idx=i)
+                    elif i in spectator_indices:
+                        spectator_indices.remove(i)
             
             # If there are no valid file descriptors, we can't continue
             if not read_list:
                 time.sleep(0.1)
                 continue
                 
-            # Use select to check which players have input available (with short timeout)
+            # Use select to check which connections have input available
             try:
                 readable, _, _ = select.select(read_list, [], [], 0.1)
                 
                 # Process readable file descriptors
                 for fd in readable:
-                    player_i = fd_to_player[fd]
+                    conn_i = fd_to_conn[fd]
                     
-                    if player_i == player_idx:
+                    if conn_i == player_idx:
                         # It's this player's turn - get their input
                         try:
-                            return recv_from_player(player_i)
+                            return recv_from_connection(conn_i)
                         except ConnectionResetError:
-                            handle_player_disconnect(player_idx)
-                            return False
+                            # Handle player disconnection
+                            if conn_i in player_indices:
+                                player_indices.remove(conn_i)
+                                send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
+                            return "quit"
                     else:
-                        # Not this player's turn
-                        # Check if they're a spectator
-                        if player_i in spectator_players:
-                            # It's a spectator - ignore their input but warn them
-                            try:
-                                _ = recv_from_player(player_i)
-                                send_to_player(player_i, "[WARNING] Spectators cannot participate. You can only watch the game.\n")
-                            except ConnectionResetError:
-                                handle_player_disconnect(player_i)
-                                return False
+                        # Not this connection's turn
+                        if conn_i in player_indices:
+                            # This is the other player - warn them once
+                            if conn_i not in warned_connections:
+                                send_to_connection(conn_i, f"[WARNING] It's not your turn. Please wait for Player {player_idx + 1} to complete their turn.\n")
+                                warned_connections.add(conn_i)
                         else:
-                            # It's another active player - warn them once
-                            if player_i not in warned_players:
-                                send_to_player(player_i, f"[WARNING] It's not your turn. Please wait for Player {player_idx + 1} to complete their turn.\n")
-                                warned_players.add(player_i)
-                            
-                            # Consume the input
-                            try:
-                                _ = recv_from_player(player_i)
-                            except ConnectionResetError:
-                                handle_player_disconnect(player_i)
-                                return False
+                            # This is a spectator - remind them they're watching
+                            if conn_i not in warned_connections:
+                                send_to_connection(conn_i, f"[INFO] You are a spectator. Player {player_idx + 1} is currently taking their turn.\n")
+                                warned_connections.add(conn_i)
                         
+                        # Consume the input
+                        try:
+                            _ = recv_from_connection(conn_i)
+                        except ConnectionResetError:
+                            # Handle disconnection
+                            if conn_i in player_indices:
+                                player_indices.remove(conn_i)
+                                send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
+                            elif conn_i in spectator_indices:
+                                spectator_indices.remove(conn_i)
+                    
             except (select.error, ValueError, IOError) as e:
                 # Handle potential errors with select
                 print(f"[ERROR] Select error: {e}")
                 time.sleep(0.1)
 
-    def recv_from_player(player_idx, timeout=None):
+    def recv_from_connection(conn_idx, timeout=None):
         try:
             # Check if there's data available to read without blocking
             if timeout is not None:
                 # Set up select with timeout
-                readable, _, _ = select.select([player_rfiles[player_idx].fileno()], [], [], timeout)
+                readable, _, _ = select.select([player_rfiles[conn_idx].fileno()], [], [], timeout)
                 if not readable:
                     return None  # Timeout occurred, no data available
             
             # Read the line
-            line = player_rfiles[player_idx].readline().strip()
+            line = player_rfiles[conn_idx].readline()
             if not line:  # Empty string indicates disconnection
-                handle_player_disconnect(player_idx)
-                return False
-            
-            # Return the received line
-            return line
-            
+                raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected\n\n")
+            return line.strip()
         except (ConnectionError, IOError, ValueError) as e:
-            handle_player_disconnect(player_idx)
-            return False
+            # Catch broader range of connection issues
+            raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected: {str(e)}\n\n")
     
-    # Create boards for all players
-    boards = [Board(BOARD_SIZE) for _ in range(2)]
+    # Create boards for the two players
+    boards = [Board(BOARD_SIZE), Board(BOARD_SIZE)]
     
-    # Setup phase - let all players place their ships concurrently using threads
-    for idx in range(2):
-        send_to_player(idx, f"[INFO] SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
+    # Inform all connections about their roles
+    for idx in range(total_connections):
+        if idx < 2:
+            send_to_connection(idx, f"[INFO] You are Player {idx + 1}. SETUP PHASE: Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.\n")
+        else:
+            send_to_connection(idx, f"[INFO] You are a Spectator. Waiting for Players 1 and 2 to set up their ships.\n")
     
-    # Using threading Event objects to synchronise the players
-    player_ready_events = [threading.Event() for _ in range(2)]
-    setup_success = [False] * 2  # Track whether each player completed setup successfully
+    # Setup phase - let players place their ships
+    player_ready_events = [threading.Event(), threading.Event()]  # Only need events for the two players
+    setup_success = [False, False]  # Track whether each player completed setup
     
     # Define a function to handle ship placement for any player with a timer
     def setup_player_ships(player_idx):
@@ -450,11 +442,10 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
             sent_reminders = set()  # Track which reminders have been sent
             
             # Send initial instructions
-            send_to_player(player_idx, "[INFO] You have 1 minute to place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+            send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
             placement = None
             
             # For manual placement, we need to track which ship we're placing
-            input_prompt_sent = False
             current_ship_index = 0
             ships_to_place = list(SHIPS)  # Make a copy of the ships list
             manual_placement_started = False
@@ -468,22 +459,22 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                 # Send time reminders
                 for reminder_time in reminder_times:
                     if remaining_time <= reminder_time and reminder_time not in sent_reminders:
-                        send_to_player(player_idx, f"[TIME] {reminder_time} seconds remaining to place your ships!")
+                        send_to_connection(player_idx, f"[TIME] {reminder_time} seconds remaining to place your ships!")
                         sent_reminders.add(reminder_time)
                 
                 # If time is up, place ships randomly
                 if remaining_time <= 0:
-                    send_to_player(player_idx, "[TIME] Time's up! Placing ships randomly.")
+                    send_to_connection(player_idx, "[TIME] Time's up! Placing ships randomly.")
                     player_board.place_ships_randomly(SHIPS)
-                    send_to_player(player_idx, "[INFO] Ships placed randomly due to time limit.")
-                    send_board_to_player(player_idx, player_idx, player_board, True)
+                    send_to_connection(player_idx, "[INFO] Ships placed randomly due to time limit.")
+                    send_board_to_connection(player_idx, player_idx, player_board, True)
                     break
                 
                 # If we're not waiting for a specific ship placement input,
                 # wait for initial placement choice (RANDOM/MANUAL)
                 if not manual_placement_started and not waiting_for_placement_input:
                     waiting_for_placement_input = True
-                    placement = recv_from_player(player_idx, timeout=min(remaining_time, 5))  # Poll every 5 seconds max
+                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))  # Poll every 5 seconds max
                     waiting_for_placement_input = False
                     
                     # If we got no input, continue the loop to check time again
@@ -491,8 +482,8 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                         continue
                     
                     if placement.lower() == 'quit':
-                        send_to_player(player_idx, "[INFO] You forfeited during setup.\n\n")
-                        send_to_all_players(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                        send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
+                        send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
                         
                         # Mark this player as not successful
                         setup_success[player_idx] = False
@@ -503,64 +494,47 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                     
                     elif placement.upper() == 'RANDOM':
                         player_board.place_ships_randomly(SHIPS)
-                        send_to_player(player_idx, "[INFO] Ships placed randomly.")
-                        send_board_to_player(player_idx, player_idx, player_board, True)
+                        send_to_connection(player_idx, "[INFO] Ships placed randomly.")
+                        send_board_to_connection(player_idx, player_idx, player_board, True)
                         break
                     
                     elif placement.upper() == 'MANUAL':
                         # Start manual placement process
                         manual_placement_started = True
-                        send_to_player(player_idx, "[INFO] Placing ships manually:")
+                        send_to_connection(player_idx, "[INFO] Placing ships manually:")
                         current_ship_index = 0
                     
                     else:
                         # Invalid placement option - ask player to try again
-                        send_to_player(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+                        send_to_connection(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
                         continue
                 
                 # Handle manual placement of ships
                 if manual_placement_started:
                     if current_ship_index >= len(ships_to_place):
                         # All ships placed successfully
-                        send_board_to_player(player_idx, player_idx, player_board, True)
-                        send_to_player(player_idx, "[INFO] All ships placed successfully.")
-                        setup_success[player_idx] = True
-                        player_ready_events[player_idx].set()
-                        send_to_player(player_idx, f"[INFO] Your ships are placed. Waiting for other players to finish placing their ships...\n")
-                        return True
+                        send_board_to_connection(player_idx, player_idx, player_board, True)
+                        send_to_connection(player_idx, "[INFO] All ships placed successfully.")
+                        break
                     
                     ship_name, ship_size = ships_to_place[current_ship_index]
                     
-                    # Show current board state and prompt, but only if we haven't shown it already
-                    if not input_prompt_sent:
-                        send_board_to_player(player_idx, player_idx, player_board, True)
-                        send_to_player(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
-                        input_prompt_sent = True
+                    # Show current board state
+                    send_board_to_connection(player_idx, player_idx, player_board, True)
+                    send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
                     
-                    # Wait for placement input with a short timeout to keep timer accurate
-                    placement = recv_from_player(player_idx, timeout=min(remaining_time, 0.1))
+                    # Wait for placement input with timeout
+                    waiting_for_placement_input = True
+                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))  # Poll every 5 seconds max
+                    waiting_for_placement_input = False
                     
-                    # check if opponent has forfeited
-                    for idx, success in enumerate(setup_success):
-                        if idx == player_idx:
-                            continue
-
-                        if success is False:
-                            send_to_player(player_idx, "[INFO] Opponent has forfeited during setup. Game cannot continue.\n")
-                            setup_success[player_idx] = False
-                            player_ready_events[player_idx].set()
-                            return False
-
                     # If we got no input, continue the loop to check time again
                     if placement is None:
                         continue
                     
-                    # We got input, so reset the prompt flag
-                    input_prompt_sent = False
-                    
                     if placement.lower() == 'quit':
-                        send_to_player(player_idx, "[INFO] You forfeited during setup.\n\n")
-                        send_to_all_players(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                        send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
+                        send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
                         
                         # Mark this player as not successful
                         setup_success[player_idx] = False
@@ -572,7 +546,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                     try:
                         parts = placement.strip().split()
                         if len(parts) != 2:
-                            send_to_player(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                            send_to_connection(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
                             continue
                         
                         coord_str, orientation_str = parts
@@ -585,22 +559,27 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
                                 'name': ship_name,
                                 'positions': occupied_positions
                             })
-                            send_to_player(player_idx, f"[INFO] {ship_name} placed successfully.")
+                            send_to_connection(player_idx, f"[INFO] {ship_name} placed successfully.")
                             current_ship_index += 1
                         else:
-                            send_to_player(player_idx, "[TIP] Cannot place ship there. Try again.")
+                            send_to_connection(player_idx, "[TIP] Cannot place ship there. Try again.")
                     except ValueError as e:
-                        send_to_player(player_idx, f"[TIP] Invalid input: {e}")
+                        send_to_connection(player_idx, f"[TIP] Invalid input: {e}")
+                        continue
             
-            # Signal that this player is ready and wait for other players
+            # Signal that this player is ready and wait for other player
             setup_success[player_idx] = True
-            send_to_player(player_idx, f"[INFO] Your ships are placed. Waiting for other players to finish placing their ships...\n")
+            send_to_connection(player_idx, f"[INFO] Your ships are placed. Waiting for the other player to finish placing their ships...\n")
+            
+            # Update spectators
+            send_to_spectators(f"[INFO] Player {player_idx + 1} has finished placing their ships.\n")
+            
             player_ready_events[player_idx].set()
             return True
             
         except ConnectionResetError:
             # Player disconnected
-            send_to_all_players(f"[INFO] Player {player_idx + 1} disconnected during setup.\n\n", exclude_idx=player_idx)
+            send_to_all_others(f"[INFO] Player {player_idx + 1} disconnected during setup.\n\n", exclude_idx=player_idx)
             
             # Mark this player as not successful
             setup_success[player_idx] = False
@@ -611,7 +590,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
     
     # Create and start threads for each player's setup
     setup_threads = []
-    for i in range(num_players):
+    for i in range(2):  # Only the first two connections are players
         thread = threading.Thread(
             target=setup_player_ships,
             args=(i,)
@@ -624,140 +603,139 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles):
         thread.join()
     
     # Check which players completed setup successfully
-    for i in range(num_players):
+    for i in range(2):
         if not player_ready_events[i].is_set() or not setup_success[i]:
-            # Remove player from active players
-            if i in active_players:
-                active_players.remove(i)
+            # Remove player from active player list
+            if i in player_indices:
+                player_indices.remove(i)
     
     # Check if we have enough players to continue
-    if len(active_players) < 2:
-        send_to_all_players("[INFO] Not enough players completed setup. Game canceled.\n\n")
+    if len(player_indices) < 2:
+        send_to_all_others("[INFO] Not enough players completed setup. Game canceled.\n\n")
         return
     
     # Gameplay phase
-    for idx in active_players:
-        send_to_player(idx, f"[INFO] GAME PHASE: All ships have been placed. Game is starting with {len(active_players)} players!\n")
+    for idx in player_indices:
+        send_to_connection(idx, f"[INFO] GAME PHASE: All ships have been placed. Game is starting!\n")
     
-    # Initialise player states
-    current_turn_player = None
-    current_player_idx = 0  # Index into active_players list
+    # Inform spectators
+    send_to_spectators("[INFO] Both players have placed their ships. The game is now starting!")
+    
+    # Determine starting player (always player 0 in this two-player version)
+    current_player_idx = 0
     
     def handle_player_turn(player_idx, is_retry=False):
         # Handle a player's turn.
-        # Args:
-        #     player_idx: Index of the player whose turn it is
         # Returns:
         #     True: Turn completed successfully
         #     False: Game should end
         #     None: Invalid move, retry
-        nonlocal active_players, current_turn_player
-        
         try:
-            current_turn_player = player_idx
+            # First, show both boards to the current player
+            send_to_connection(player_idx, "Your board:")
+            send_board_to_connection(player_idx, player_idx, boards[player_idx], True)
             
-            # First, show the player their own board with ships
-            send_to_player(player_idx, "Your board:")
-            send_board_to_player(player_idx, player_idx, boards[player_idx], True)
+            # Determine opponent index (the other player)
+            opponent_idx = 1 if player_idx == 0 else 0
             
-            # Show opponent board - simplified for exactly two players
-            target_player_idx = active_players[0] if player_idx == active_players[1] else active_players[1]
-            send_to_player(player_idx, f"Player {target_player_idx + 1}'s board:")
-            send_board_to_player(player_idx, target_player_idx, boards[target_player_idx], False)
+            send_to_connection(player_idx, "Opponent's board:")
+            send_board_to_connection(player_idx, opponent_idx, boards[opponent_idx], False)
             
-            # Let other players know whose turn it is - only if this is not a retry
+            # Let the other player and spectators know whose turn it is
             if not is_retry:
-                for idx in active_players:
-                    if idx != player_idx:
-                        send_to_player(idx, f"[INFO] Player {player_idx + 1}'s turn. Please wait...\n")
-                send_to_all_spectators(f"[INFO] Player {player_idx + 1}'s turn is starting.\n")
+                send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1}'s turn. Please wait...\n")
+                send_to_spectators(f"[INFO] Player {player_idx + 1}'s turn.\n")
+                
+                # Show spectators both boards (opponent's without hidden ships)
+                for spec_idx in spectator_indices:
+                    send_board_to_connection(spec_idx, player_idx, boards[player_idx], False)
+                    send_board_to_connection(spec_idx, opponent_idx, boards[opponent_idx], False)
             
-            send_to_player(player_idx, "[INFO] Your turn! Enter a coordinate to fire at (e.g., 'B5'):")
-            fire_input = handle_input_during_turn(player_idx, turn_timeout=15)
+            # Player's turn to fire
+            send_to_connection(player_idx, "[INFO] Your turn!\n\n [TIP] Enter a coordinate to fire at (e.g., 'B5'):")
+            
+            # Get input with timeout
+            fire_input = handle_input_during_turn(player_idx, turn_timeout=15)  # 15 second timeout
 
             if fire_input == "timeout":
-                send_to_all_spectators(f"[INFO] Player {player_idx + 1} timed out and gave up their turn.")
-                return True
-            elif fire_input.lower() == "quit":
-                handle_player_disconnect(player_idx)
-                return False
-
+                return True  # Continue game with next player
+            
             try:
-                # Parse coordinate and fire - simplified to only expect coordinates
-                coord_str = fire_input.strip().upper()
+                if fire_input.strip().lower() == 'quit':
+                    send_to_connection(player_idx, "[INFO] You forfeited the game.\n")
+                    send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} forfeited. You win!\n")
+                    send_to_spectators(f"[INFO] Player {player_idx + 1} forfeited. Player {opponent_idx + 1} wins!\n")
+                    return False
+            
+                # Parse coordinate and fire
+                coord_str = fire_input.strip()
                 row, col = parse_coordinate(coord_str)
-                
-                # Determine the target player automatically
-                target_player_idx = active_players[0] if player_idx == active_players[1] else active_players[1]
-                target_player_num = target_player_idx + 1
-                
-                target_board = boards[target_player_idx]
+                target_board = boards[opponent_idx]
                 result, sunk_name = target_board.fire_at(row, col)
                 
-                # Notify players of the result
+                # Notify players and spectators of the result
                 if result == 'hit':
                     if sunk_name:
-                        send_to_player(player_idx, f"\n[INFO] HIT! You sank Player {target_player_num}'s {sunk_name}!\n\n")
-                        send_to_player(target_player_idx, f"[INFO] Your {sunk_name} was sunk by Player {player_idx + 1}!\n\n")
-                        send_to_all_spectators(f"[INFO] Player {player_idx + 1} sank Player {target_player_num}'s {sunk_name}!\n\n")
-    
-                    else:
-                        send_to_player(player_idx, f"\n[INFO] HIT on Player {target_player_num}'s ship!\n\n")
-                        send_to_player(target_player_idx, f"[INFO] Your ship at {coord_str} was hit by Player {player_idx + 1}!\n\n")
-                        send_to_all_spectators(f"[INFO] Player {player_idx + 1} hit Player {target_player_num}'s ship at {coord_str}!\n\n")
-
-                    if target_board.all_ships_sunk():
-                        send_to_player(player_idx, f"\n[INFO] You've sunk all of Player {target_player_num}'s ships! You win!\n\n")
-                        send_to_player(target_player_idx, "[INFO] All your ships have been sunk. You lose!\n\n")
-                        send_to_all_spectators(f"[INFO] Player {player_idx + 1} won by sinking all of Player {target_player_num}'s ships!\n\n")
+                        # Ship sunk
+                        send_to_connection(player_idx, f"\n[INFO] HIT! You sank your opponent's {sunk_name}!\n\n")
+                        send_to_connection(opponent_idx, f"[INFO] Your {sunk_name} was sunk!\n\n")
+                        send_to_spectators(f"[INFO] Player {player_idx + 1} sank Player {opponent_idx + 1}'s {sunk_name}!\n\n")
                         
-                        # Game is now over
-                        send_to_all_players("[INFO] Game has ended.", include_spectators=True)
-                        return False  # Signal game end
+                        # Check if all opponent's ships are sunk
+                        if target_board.all_ships_sunk():
+                            send_to_connection(player_idx, "\n[INFO] You've sunk all of your opponent's ships! You win!\n\n")
+                            send_to_connection(opponent_idx, "[INFO] All your ships have been sunk. You lose!\n\n")
+                            send_to_spectators(f"[INFO] Player {player_idx + 1} has won the game by sinking all of Player {opponent_idx + 1}'s ships!\n\n")
+                            return False
+                    else:
+                        # Just a hit
+                        send_to_connection(player_idx, f"\n[INFO] HIT!\n\n")
+                        send_to_connection(opponent_idx, f"[INFO] Your ship at {coord_str} was hit!\n\n")
+                        send_to_spectators(f"[INFO] Player {player_idx + 1} hit Player {opponent_idx + 1}'s ship at {coord_str}!\n\n")
                     
                 elif result == 'miss':
-                    send_to_player(player_idx, f"\n[INFO] MISS on Player {target_player_num}'s board!\n")
-                    send_to_player(target_player_idx, f"[INFO] Player {player_idx + 1} fired at {coord_str} and missed.\n")
-                    send_to_all_spectators(f"[INFO] Player {player_idx + 1} fired at {coord_str} on Player {target_player_num}'s board and missed.\n")
+                    send_to_connection(player_idx, f"\n[INFO] MISS!\n")
+                    send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} fired at {coord_str} and missed.\n")
+                    send_to_spectators(f"[INFO] Player {player_idx + 1} fired at {coord_str} and missed.\n")
                 
                 elif result == 'already_shot':
-                    send_to_player(player_idx, f"\n[INFO]You've already fired at that location on Player {target_player_num}'s board. Try again.\n")
+                    send_to_connection(player_idx, f"\n[INFO] You've already fired at that location. Try again.\n")
                     return None
             
             except ValueError as e:
-                send_to_player(player_idx, f"\n[TIP] Invalid input: {e}\n")
+                send_to_connection(player_idx, f"\n[TIP] Invalid input: {e}\n")
                 return None
             
             return True
 
         except ConnectionResetError:
-            handle_player_disconnect(player_idx)
+            # Handle player disconnection
+            opponent_idx = 1 if player_idx == 0 else 0
+            
+            send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} disconnected. You win by default!\n\n")
+            send_to_spectators(f"[INFO] Player {player_idx + 1} disconnected. Player {opponent_idx + 1} wins by default!\n\n")
+            
             return False
     
     # Main game loop
-    while len(active_players) > 1:
-        update_spectators_game_state()
-
-        current_idx = active_players[current_player_idx]
-        result = handle_player_turn(current_idx, is_retry=False)
+    current_player_idx = 0  # Start with Player 1
+    while len(player_indices) == 2:
+        result = handle_player_turn(current_player_idx, is_retry=False)
         
         # Check the result of the turn
         if result is False:
             # Game ended
             break
         elif result is None:
-            # Invalid move, retry with the same player, but mark as retry
-            # This will prevent sending duplicate turn notifications
+            # Invalid move, retry with the same player
             while result is None:
-                result = handle_player_turn(current_idx, is_retry=True)
+                result = handle_player_turn(current_player_idx, is_retry=True)
                 if result is False:
                     break
         else:
-            update_spectators_game_state()
-            
-            # Notify spectators whose turn is next
-            next_player_idx = active_players[(active_players.index(current_idx) + 1) % len(active_players)]
-            send_to_all_spectators(f"[INFO] Next turn: Player {next_player_idx + 1}\n")
-            
-        # Move to the next player
-        current_player_idx = (active_players.index(current_idx) + 1) % len(active_players)
+            # Valid move, switch to other player
+            current_player_idx = 1 if current_player_idx == 0 else 0
+
+    # Game has ended, final message
+    for idx in player_indices + spectator_indices:
+        send_to_connection(idx, "[INFO] Game has ended.\n")
