@@ -46,8 +46,8 @@ def handle_client(conn, addr):
             rfile = conn.makefile('r')
             wfile = conn.makefile('w')
 
-            for i, c in active_player_connections:
-                if c == -1:
+            for i in active_player_connections:
+                if i == -1:
                     # A player has disconnected, insert this connection in their place
                     active_player_connections[i] = (conn, addr, rfile, wfile, (i + 1))
                     break
@@ -362,7 +362,7 @@ def run_game_session(active_player_connections, spectator_connections):
                 pass
         
         # Run the multiplayer game (passing both player files and spectator wfiles)
-        run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles, active_player_connections)
+        run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles)
         
         # Game has ended - notify all connections
         for wfile in player_wfiles + spectator_wfiles:
