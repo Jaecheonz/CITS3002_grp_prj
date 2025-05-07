@@ -22,4 +22,6 @@ def verify_checksum(full_packet: bytes) -> bool:
 
 def strip_checksum(full_packet: bytes) -> bytes:
     """Removes the checksum and returns only the data."""
+    if len(full_packet) < 4:
+        raise ValueError("Packet too short to contain checksum")
     return full_packet[:-4]

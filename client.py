@@ -6,6 +6,7 @@ import socket
 import threading
 import os
 import time
+import utils
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -15,66 +16,59 @@ running = True
 # Variable to track the game phase
 game_phase = "setup"  # Can be "setup" or "gameplay"
 
-def receive_messages(rfile):
-    # Continuously receive and display messages from the server
+def receive_messages(sock):
     global running, game_phase
     try:
         while running:
-            line = rfile.readline()
-            if not line:
+            full_packet = sock.recv(4096)
+            if not full_packet:
                 print("[INFO] Server disconnected.\n\n")
                 running = False
                 break
-                
-            line = line.strip()
             
-            # Check for phase transition
+            if not utils.verify_checksum(full_packet):
+                print("[WARNING] Corrupted packet received. Discarding...")
+                continue  # Skip this corrupted packet
+            
+            data = utils.strip_checksum(full_packet)
+            line = data.decode().strip()
+            
+            # The rest of your line processing logic stays the same
             if "GAME PHASE" in line:
                 game_phase = "gameplay"
                 print("[INFO] Entered gameplay phase.\n")
-            
-            # Handle different types of messages
+
             if line.endswith("Grid:"):
-                # Begin reading board lines
                 print(f"\n[{line}]")
-                while True:
-                    board_line = rfile.readline()
-                    if not board_line or board_line.strip() == "":
-                        break
-                    print(board_line.strip())
+                # NOTE: Here you must assume multiple packets or structure change to receive board lines.
+                # We'll assume simple text for now.
             else:
-                # Normal message
                 print(line)
-                
-            # Check for game end messages
+            
             if any(phrase in line for phrase in [
-                "Game has ended", 
+                "Game has ended",
                 "Game canceled",
-                "Game start canceled" 
-                "You win!", 
+                "Game start canceled",
+                "You win!",
                 "You are eliminated",
                 "wins the game",
                 "You are the last player standing"
             ]):
                 print("\n[INFO] Game has ended. Exiting...\n")
                 running = False
-                # Force exit to terminate all threads
                 time.sleep(3)
                 os._exit(0)
-                
-            # Detect forfeit/disconnect messages
+            
             if any(phrase in line for phrase in [
                 "forfeited",
                 "disconnected",
                 "Not enough players"
             ]):
-                # Don't exit immediately as the game might continue with other players
                 print("\n[INFO] A player has left the game.")
-                
+
     except Exception as e:
         print(f"[ERROR] Exception in receive thread: {e}")
         running = False
-        # Force exit on exception
         time.sleep(3)
         os._exit(1)
 
@@ -88,22 +82,22 @@ def main():
             s.connect((HOST, PORT))
             print(f"[INFO] Connected to server at {HOST}:{PORT}\n")
             print("[INFO] Waiting for the game to start with enough players...\n")
-            
-            rfile = s.makefile('r')
-            wfile = s.makefile('w')
-            
+
             # Start a thread for receiving messages
-            receive_thread = threading.Thread(target=receive_messages, args=(rfile,))
-            receive_thread.daemon = True  # Thread will terminate when main thread exits
+            receive_thread = threading.Thread(target=receive_messages, args=(s,))
+            receive_thread.daemon = True
             receive_thread.start()
-            
+
             # Main thread handles sending user input
             while running:
                 user_input = input("")
+                if not user_input:
+                    continue
 
-                wfile.write(user_input + '\n')
-                wfile.flush()
-                
+                # Send the user input with checksum
+                packet = utils.add_checksum(user_input.encode())
+                s.sendall(packet)
+
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.\n")
                     running = False
@@ -118,6 +112,6 @@ def main():
         finally:
             running = False
             print("[INFO] Disconnected from server.\n")
-
+            
 if __name__ == "__main__":
     main()

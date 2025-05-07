@@ -7,6 +7,7 @@ import random
 import threading
 import select
 import time
+from utils import add_checksum, verify_checksum, strip_checksum
 
 BOARD_SIZE = 10
 SHIPS = [
@@ -200,6 +201,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     player_indices = [0, 1]  # Fixed player indices
     spectator_indices = list(range(2, total_connections))
     
+    
     def send_to_connection(conn_idx, msg):
         # Send a message to a specific connection (player or spectator)
         try:
@@ -208,7 +210,33 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             if wfile.closed:
                 raise BrokenPipeError("File already closed")
             
-            wfile.write(msg + '\n')
+            # Determine if we're dealing with a text or binary file mode
+            is_binary_mode = hasattr(wfile, 'mode') and 'b' in wfile.mode
+            
+            # Convert message to bytes if it's a string (for binary mode)
+            # or ensure it's a string for text mode
+            if is_binary_mode:
+                # File is in binary mode
+                if isinstance(msg, str):
+                    msg_bytes = msg.encode('utf-8')
+                else:
+                    msg_bytes = msg
+                    
+                # Add checksum to the message
+                packet_with_checksum = add_checksum(msg_bytes)
+                    
+                # Write the packet with checksum
+                wfile.write(packet_with_checksum + b'\n')
+            else:
+                # File is in text mode, expecting strings
+                if isinstance(msg, bytes):
+                    msg_str = msg.decode('utf-8')
+                else:
+                    msg_str = msg
+                    
+                # Write the message as a string
+                wfile.write(msg_str + '\n')
+            
             wfile.flush()
             return True
         except (BrokenPipeError, ConnectionError, ConnectionResetError, IOError) as e:
@@ -220,9 +248,9 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
             elif conn_idx in spectator_indices:
                 spectator_indices.remove(conn_idx)
-            
+                
             return False
-    
+
     def send_to_all_others(msg, exclude_idx=None):
         # Send a message to all connections except excluded ones
         if exclude_idx is None:
@@ -239,12 +267,12 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
         for idx in spectator_indices:
             if idx not in exclude_idx:
                 send_to_connection(idx, msg)
-    
+
     def send_to_spectators(msg):
         # Helper function to send message only to spectators
         for idx in spectator_indices:
             send_to_connection(idx, msg)
-    
+
     def send_board_to_connection(conn_idx, board_idx, board, show_hidden=False):
         # Send a board state to a connection
         try:
@@ -260,21 +288,29 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 # This is a spectator
                 board_owner = f"Player {board_idx + 1}'s"
             
-            wfile.write(f"{board_owner} Grid:\n")
+            # Build the board representation as a string
+            board_msg = f"{board_owner} Grid:\n"
             
             # Which grid to display depends on whether we're showing hidden ships
             grid_to_show = board.hidden_grid if show_hidden else board.display_grid
             
             # Column headers
-            wfile.write("+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n')
+            board_msg += "+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n'
             
             # Each row with label
             for r in range(board.size):
                 row_label = chr(ord('A') + r)
                 row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
-                wfile.write(f"{row_label:2} {row_str}\n")
+                board_msg += f"{row_label:2} {row_str}\n"
             
-            wfile.write('\n')
+            board_msg += '\n'
+            
+            # Convert to bytes, add checksum, and send
+            board_bytes = board_msg.encode('utf-8')
+            packet_with_checksum = add_checksum(board_bytes)
+            
+            # Here's the fix: make sure we're writing bytes, not mixing bytes and strings
+            wfile.write(packet_with_checksum + b'\n')
             wfile.flush()
             return True
         except (BrokenPipeError, ConnectionError) as e:
@@ -288,7 +324,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 spectator_indices.remove(conn_idx)
             
             return False
-    
+
     def handle_input_during_turn(player_idx, turn_timeout=15):
         # Keep track of which connections have already been warned
         warned_connections = set()
@@ -324,50 +360,29 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                     reminders_sent.add(threshold)
                     break  # Only send one reminder at a time
 
-            # Get list of file descriptors to check
-            read_list = []
-            fd_to_conn = {}  # Map file descriptors to connection indices
-            
-            # Collect valid file descriptors for all connections
-            all_connections = player_indices + spectator_indices
-            for i in all_connections:
-                try:
-                    fd = player_rfiles[i].fileno()
-                    if fd >= 0:  # Check if it's a valid file descriptor
-                        read_list.append(fd)
-                        fd_to_conn[fd] = i
-                except (ValueError, IOError):
-                    # File descriptor is invalid or closed
-                    if i in player_indices:
-                        player_indices.remove(i)
-                        send_to_all_others(f"[INFO] Player {i + 1} disconnected from the game.\n\n", exclude_idx=i)
-                    elif i in spectator_indices:
-                        spectator_indices.remove(i)
-            
-            # If there are no valid file descriptors, we can't continue
-            if not read_list:
-                time.sleep(0.1)
-                continue
-                
-            # Use select to check which connections have input available
+            # Check current player for input first, without blocking
             try:
-                readable, _, _ = select.select(read_list, [], [], 0.1)
-                
-                # Process readable file descriptors
-                for fd in readable:
-                    conn_i = fd_to_conn[fd]
+                input_data = recv_from_connection(player_idx, timeout=0.1)
+                if input_data is not None:
+                    return input_data
+            except ConnectionResetError:
+                # Handle player disconnection
+                if player_idx in player_indices:
+                    player_indices.remove(player_idx)
+                    send_to_all_others(f"[INFO] Player {player_idx + 1} disconnected from the game.\n\n", exclude_idx=player_idx)
+                return "quit"
+
+            # Check other connections (players and spectators)
+            all_connections = player_indices + spectator_indices
+            for conn_i in all_connections:
+                # Skip current player, we already checked them
+                if conn_i == player_idx:
+                    continue
                     
-                    if conn_i == player_idx:
-                        # It's this player's turn - get their input
-                        try:
-                            return recv_from_connection(conn_i)
-                        except ConnectionResetError:
-                            # Handle player disconnection
-                            if conn_i in player_indices:
-                                player_indices.remove(conn_i)
-                                send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
-                            return "quit"
-                    else:
+                try:
+                    # Try to get input from this connection (non-blocking)
+                    input_data = recv_from_connection(conn_i, timeout=0)
+                    if input_data is not None:
                         # Not this connection's turn
                         if conn_i in player_indices:
                             # This is the other player - warn them once
@@ -379,46 +394,89 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                             if conn_i not in warned_connections:
                                 send_to_connection(conn_i, f"[INFO] You are a spectator. Player {player_idx + 1} is currently taking their turn.\n")
                                 warned_connections.add(conn_i)
-                        
-                        # Consume the input
-                        try:
-                            _ = recv_from_connection(conn_i)
-                        except ConnectionResetError:
-                            # Handle disconnection
-                            if conn_i in player_indices:
-                                player_indices.remove(conn_i)
-                                send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
-                            elif conn_i in spectator_indices:
-                                spectator_indices.remove(conn_i)
-                    
-            except (select.error, ValueError, IOError) as e:
-                # Handle potential errors with select
-                print(f"[ERROR] Select error: {e}")
-                time.sleep(0.1)
+                except ConnectionResetError:
+                    # Handle disconnection
+                    if conn_i in player_indices:
+                        player_indices.remove(conn_i)
+                        send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
+                    elif conn_i in spectator_indices:
+                        spectator_indices.remove(conn_i)
+            
+            # Small sleep to prevent CPU hogging
+            time.sleep(0.1)
 
     player_buffers = ["", ""]
 
     def recv_from_connection(conn_idx, timeout=None):
         try:
-            # Check if there's data available to read without blocking
-            if timeout is not None:
-                # Set up select with timeout
-                readable, _, _ = select.select([player_rfiles[conn_idx].fileno()], [], [], timeout)
-                if not readable:
-                    return None  # Timeout occurred, no data available
+            rfile = player_rfiles[conn_idx]
             
-            # Read the line from the file-like object (not from socket)
-            line = player_rfiles[conn_idx].readline()
-            if not line:  # Empty string indicates disconnection
+            # Check if the file has data ready without using select
+            if timeout is not None:
+                # For file-like objects that don't support select/fileno,
+                # we need an alternative approach to handle timeouts
+                
+                # Simple non-blocking check if the timeout is 0
+                if timeout == 0:
+                    # Use peek to check if there's data available
+                    if hasattr(rfile, 'peek'):
+                        data = rfile.peek(1)
+                        if not data:  # No data available
+                            return None
+                    else:
+                        # Can't do a proper non-blocking check, assume no data
+                        return None
+                
+                # For other timeouts, we'll use a simple polling approach
+                elif timeout > 0:
+                    # Set the end time for our polling loop
+                    end_time = time.time() + timeout
+                    while time.time() < end_time:
+                        # Check if there's data (if peek is available)
+                        if hasattr(rfile, 'peek'):
+                            data = rfile.peek(1)
+                            if data:  # Data is available
+                                break
+                        # Sleep briefly to avoid tight loop
+                        time.sleep(min(0.05, (end_time - time.time()) / 2))
+                        
+                        # Check if we've reached the timeout
+                        if time.time() >= end_time:
+                            return None  # Timeout reached, no data
+            
+            # If we get here, either there's data available or timeout is None
+            # Try to read the data now
+            raw_data = rfile.readline()
+            if not raw_data:  # Empty string indicates disconnection
                 raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected\n\n")
-            return line.strip()
+            
+            # Handle both string and bytes cases consistently
+            if isinstance(raw_data, str):
+                # If it's already a string, just strip the newline
+                packet = raw_data.rstrip('\n').encode('utf-8')
+            else:
+                # If it's bytes, strip the newline byte
+                packet = raw_data.rstrip(b'\n')
+            
+            # Verify and strip checksum
+            if not verify_checksum(packet):
+                print(f"[WARNING] Received corrupt data from {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}")
+                return None  # Or handle corrupt data differently
+            
+            # Strip checksum and decode the message to ensure we ALWAYS return a string
+            data = strip_checksum(packet)
+            if isinstance(data, bytes):
+                return data.decode('utf-8').strip()
+            else:
+                # If strip_checksum already returned a string (unlikely but being safe)
+                return data.strip()
         except (ConnectionError, IOError, ValueError) as e:
             # Catch broader range of connection issues
             raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected: {str(e)}\n\n")
-    
+
     # Create boards for the two players
     boards = [Board(BOARD_SIZE), Board(BOARD_SIZE)]
-    
+
     # Inform all connections about their roles
     for idx in range(total_connections):
         if idx < 2:
@@ -477,7 +535,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 # wait for initial placement choice (RANDOM/MANUAL)
                 if not manual_placement_started and not waiting_for_placement_input:
                     waiting_for_placement_input = True
-                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))
+                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))
                     waiting_for_placement_input = False
                     
                     # If we got no input, continue the loop to check time again
@@ -533,9 +591,22 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                     try:
                         readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
                         if readable:
-                            opponent_line = player_rfiles[opponent_idx].readline()
-                            if not opponent_line:
+                            # Read the raw data
+                            opponent_data = player_rfiles[opponent_idx].readline()
+                            if not opponent_data:
                                 raise ConnectionResetError()
+                                
+                            # If data exists, we should verify its checksum
+                            # Convert to bytes if it's not already
+                            if isinstance(opponent_data, str):
+                                opponent_packet = opponent_data.rstrip('\n').encode('utf-8')
+                            else:
+                                opponent_packet = opponent_data.rstrip(b'\n')
+                                
+                            # Just check if the data is valid - we don't need to process it
+                            if not verify_checksum(opponent_packet):
+                                print(f"[WARNING] Received corrupt data from Player {opponent_idx + 1}")
+                                # You might want to handle corrupt data differently
                     except (ConnectionResetError, OSError):
                         send_to_connection(player_idx, "[ALERT] Your opponent has disconnected. Setup aborted.\n\n")
                         setup_success[player_idx] = False
@@ -732,7 +803,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             opponent_idx = 1 if player_idx == 0 else 0
             
             send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")
-            send_to_spectators(f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")            
+            send_to_spectators(f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")
 
             # Wait for the player to reconnect
             timeout = 60  # 1 minute to reconnect

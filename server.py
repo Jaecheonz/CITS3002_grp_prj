@@ -6,6 +6,7 @@ import socket
 import threading
 import select
 import time
+import utils  # Import utils module for checksum functions
 from battleship import run_multiplayer_game_online
 
 HOST = '127.0.0.1'
@@ -26,6 +27,94 @@ game_ready_event = threading.Event()
 countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
 
+# Custom send function to add checksums
+def send_message(conn, message):
+    try:
+        if isinstance(message, str):
+            message_bytes = message.encode()
+        else:
+            message_bytes = message
+        
+        # Add checksum to the message
+        packet = utils.add_checksum(message_bytes)
+        
+        # Send the packet with checksum
+        conn.sendall(packet)
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to send message: {e}")
+        return False
+
+# Custom receive function to verify checksums
+def receive_message(conn, buffer_size=4096):
+    try:
+        message_bytes = conn.recv(buffer_size)
+        if not message_bytes:
+            return None
+        
+        # Verify the checksum
+        if not utils.verify_checksum(message_bytes):
+            print(f"[WARNING] Received corrupted packet. Discarding...")
+            return None
+        
+        # Strip the checksum to get the original message
+        data = utils.strip_checksum(message_bytes)
+        return data.decode().strip()
+    except Exception as e:
+        print(f"[ERROR] Failed to receive message: {e}")
+        return None
+
+# Modified file-like object that uses checksums
+class ChecksumFile:
+    def __init__(self, conn, mode):
+        self.conn = conn
+        self.mode = mode
+        self.buffer = []
+        self._closed = False  # Track if closed manually
+        
+    def write(self, message):
+        if self.mode != 'w':
+            raise IOError("File not open for writing")
+        self.buffer.append(message)
+        return len(message)
+    
+    def flush(self):
+        if self.mode != 'w':
+            raise IOError("File not open for writing")
+        try:
+            message = ''.join(self.buffer)
+            send_message(self.conn, message)
+            self.buffer = []
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to flush buffer: {e}")
+            return False
+    
+    def readline(self):
+        if self.mode != 'r':
+            raise IOError("File not open for reading")
+        try:
+            msg = receive_message(self.conn)
+            if msg is None:
+                return ""
+            return msg + "\n"
+        except Exception as e:
+            print(f"[ERROR] Failed to read line: {e}")
+            return ""
+
+    def close(self):
+        """Manually close the connection and mark as closed."""
+        if not self._closed:
+            try:
+                self.conn.close()
+            except Exception as e:
+                print(f"[ERROR] Failed to close connection: {e}")
+            self._closed = True
+
+    @property
+    def closed(self):
+        return self._closed
+
 def handle_client(conn, addr):
     # Handle a client connection by adding it to the appropriate connection list.
     global game_in_progress, active_player_connections, spectator_connections, countdown_timer_running
@@ -36,23 +125,21 @@ def handle_client(conn, addr):
         with connection_lock:
             if game_in_progress:
                 # Game already in progress, reject connection
-                reject_file = conn.makefile('w')
-                reject_file.write("[INFO] Sorry, a game is already in progress. Please try again later.\n\n")
-                reject_file.flush()
+                message = "[INFO] Sorry, a game is already in progress. Please try again later.\n\n"
+                send_message(conn, message)
                 conn.close()
                 return
             
             if len(active_player_connections) + len(spectator_connections) >= MAX_CONNECTIONS:
                 # Too many connections, reject connection
-                reject_file = conn.makefile('w')
-                reject_file.write(f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_CONNECTIONS}). Please try again later.\n\n")
-                reject_file.flush()
+                message = f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_CONNECTIONS}). Please try again later.\n\n"
+                send_message(conn, message)
                 conn.close()
                 return
             
-            # Setup file handlers for the connection
-            rfile = conn.makefile('r')
-            wfile = conn.makefile('w')
+            # Setup file handlers for the connection using our checksum wrappers
+            rfile = ChecksumFile(conn, 'r')
+            wfile = ChecksumFile(conn, 'w')
             
             # Determine if this is an active player or spectator
             is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
