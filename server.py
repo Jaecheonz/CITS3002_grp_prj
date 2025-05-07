@@ -29,11 +29,12 @@ countdown_timer_lock = threading.Lock()
 reconnecting = False
 
 
-def monitor_connections(spectator_connections): 
+def monitor_connections(): 
     #monitors connections during the game phase
     global active_player_connections
     global game_in_progress
     global reconnecting
+    global spectator_connections
     try:
         while game_in_progress:
             # Check active player connections
@@ -117,8 +118,14 @@ def handle_client(conn, addr):
             
             # Determine if this is an active player or spectator
             is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
-            
-            if is_active_player:
+            if is_active_player and reconnecting:
+                # Active player reconnecting - get the player number from the list
+                player_num = 3 - active_player_connections[0][4] # Assuming player numbers are 1 and 2 calculate the reconnecting player number
+                active_player_connections.append((conn, addr, rfile, wfile, player_num))
+                wfile.write(f"[INFO] Welcome back player {player_num}!.\n\n")
+                reconnecting = False # Reset reconnecting flag
+
+            elif is_active_player:
                 # Active player - gets to play the game
                 player_num = len(active_player_connections) + 1
                 active_player_connections.append((conn, addr, rfile, wfile, player_num))
@@ -366,8 +373,7 @@ def start_game_countdown():
             
         # Start the game and connection monitor in a new thread
         monitor_thread = threading.Thread(
-            target=monitor_connections,
-            args=(active_player_connections, spectator_connections)
+            target=monitor_connections
         )
         monitor_thread.daemon = True
         monitor_thread.start()
