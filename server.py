@@ -15,6 +15,7 @@ PORT = 5000
 ACTIVE_PLAYERS = 2  # Exactly 2 active players needed
 MAX_CONNECTIONS = 8  # Maximum total connections (players + spectators)
 GAME_START_DELAY = 8  # Seconds to wait after active players join before starting
+CONNECTION_TIMEOUT = 30  # Seconds to wait for a response before considering the connection lost
 
 # Global variables to track connections
 active_player_connections = []  # List of active players (max 2)
@@ -25,6 +26,61 @@ game_in_progress_lock = threading.Lock()
 game_ready_event = threading.Event()
 countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
+reconnecting = False
+
+
+def monitor_connections(active_player_connections, spectator_connections):
+    global game_in_progress
+    global reconnecting
+
+    try:
+        while game_in_progress:
+            with connection_lock:
+                # Check active player connections
+                for i in range(len(active_player_connections) - 1, -1, -1):
+                    conn, addr, _, _, player_num = active_player_connections[i]
+                    try:
+                        # Test if the connection is still alive
+                        conn.send(b'\0')  # Send a null byte
+                    except:
+                        reconnecting = True
+                        disconnected_player_num = player_num  # Store the player number
+                        print(f"[INFO] Player {disconnected_player_num} ({addr}) has lost connection.")
+                        del active_player_connections[i]
+                        reconnecting = True  # Set reconnecting flag
+
+                        # Notify remaining connections
+                        for _, _, _, wf, _ in active_player_connections + spectator_connections:
+                            wf.write(f"[INFO] Player {player_num} has lost connection. Awaiting reconnect...\n\n")
+                            wf.flush()
+
+                #check spectator connections
+                for i in range(len(spectator_connections) - 1, -1, -1):
+                    conn, addr, _, _, spectator_num = spectator_connections[i]
+                    try:
+                        # Test if the connection is still alive
+                        conn.send(b'\0')  # Send a null byte
+                    except:
+                        print(f"[INFO] Spectator {spectator_num} ({addr}) has lost connection.")
+                        del spectator_connections[i]
+
+            if reconnecting:
+                # Wait for CONNECTION_TIMEOUT seconds for a new connection
+                start_time = time.time()
+                while time.time() - start_time < CONNECTION_TIMEOUT:
+                    if len(active_player_connections) < ACTIVE_PLAYERS:
+                        time.sleep(1)  # Check every second
+                    else:
+                        # If player reconnects, break out of the loop
+                        print(f"[INFO] Player {disconnected_player_num} has reconnected.")
+                        reconnecting = False
+                        break
+
+            time.sleep(1)  # Check connections every second
+            print(f"[INFO] Monitoring connections... {len(active_player_connections)} active players, {len(spectator_connections)} spectators.\n")
+
+    except Exception as e:
+        print(f"[ERROR] Connection monitoring error: {e}")
 
 def handle_client(conn, addr):
     # Handle a client connection by adding it to the appropriate connection list.
@@ -295,7 +351,14 @@ def start_game_countdown():
             # Set the event to notify waiting threads
             game_ready_event.set()
             
-        # Start the game in a new thread
+        # Start the game and connection monitor in a new thread
+        monitor_thread = threading.Thread(
+            target=monitor_connections,
+            args=(active_player_connections, spectator_connections)
+        )
+        monitor_thread.daemon = True
+        monitor_thread.start()
+
         game_thread = threading.Thread(
             target=run_game_session,
             args=(active_player_connections, spectator_connections)
