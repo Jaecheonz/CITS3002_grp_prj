@@ -54,7 +54,7 @@ def monitor_connections():
                         wf.write(f"[INFO] Player {del_player_num} has lost connection. Awaiting reconnect...\n\n")
                         wf.flush()
                     
-                    reconnect_event.set() # Set the event to notify waiting threads
+                    reconnect_event.clear() # Set the event to notify waiting threads
                     # Start a thread to wait for reconnection
                     reconnect_thread = threading.Thread(target=reconnect_player, args=(del_player_num,))
                     reconnect_thread.daemon = True
@@ -94,14 +94,14 @@ def reconnect_player(disconnected_player_num):
                 # If player reconnects, break out of the loop
                 print(f"[INFO] Player {disconnected_player_num} has reconnected.")
                 reconnecting = False
-                reconnect_event.clear()  # Clear the event to notify waiting threads
+                reconnect_event.set()  # Clear the event to notify waiting threads
                 break
     if reconnecting:
         # If the player didn't reconnect in time, notify all connections and exit game
         for _, _, _, wf, _ in active_player_connections + spectator_connections:
             wf.write(f"[INFO] Player {disconnected_player_num} did not reconnect in time. Not enough players to continue.\n\n")
             wf.flush()
-            reconnect_event.clear()  # Clear the event to notify waiting threads
+            reconnect_event.set()  # Clear the event to notify waiting threads
     
 
 def handle_client(conn, addr):

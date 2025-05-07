@@ -46,7 +46,6 @@ def receive_messages(rfile):
                 # Normal message
                 print(line)
 
-            '''
             # Check for game end messages
             if any(phrase in line for phrase in [
                 "Game has ended", 
@@ -62,7 +61,7 @@ def receive_messages(rfile):
                 # Force exit to terminate all threads
                 time.sleep(3)
                 os._exit(0)
-            '''
+
             # Detect forfeit/disconnect messages
             if any(phrase in line for phrase in [
                 "forfeited",
