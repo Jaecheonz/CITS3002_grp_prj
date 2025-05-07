@@ -199,8 +199,10 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     num_players = 2
     player_indices = [0, 1]  # Fixed player indices
     spectator_indices = list(range(2, total_connections))
-    
+    global active_player_connections
+
     def handle_disconnection(player_idx):
+        global active_player_connections
         # Handle player disconnection
         opponent_idx = 1 if player_idx == 0 else 0
         
@@ -208,6 +210,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
         send_to_spectators(f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")            
 
         player_indices[player_idx] = -1  # Mark this player as disconnected
+        active_player_connections[player_idx] = -1  # Mark this player as disconnected
 
         # Wait for the player to reconnect
         timeout = 60  # 1 minute to reconnect
@@ -460,182 +463,183 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     # Define a function to handle ship placement for any player with a timer
     def setup_player_ships(player_idx):
         nonlocal setup_success
-        
-        try:
-            player_board = boards[player_idx]
-            
-            # Set up timer-related variables
-            start_time = time.time()
-            time_limit = 60  # 1 minute in seconds
-            reminder_times = {45, 30, 15, 10, 5}  # Reminders to send
-            sent_reminders = set()  # Track which reminders have been sent
-            
-            # Send initial instructions
-            send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
-            placement = None
-            
-            # For manual placement, we need to track which ship we're placing
-            current_ship_index = 0
-            ships_to_place = list(SHIPS)  # Make a copy of the ships list
-            manual_placement_started = False
-            waiting_for_placement_input = False
-            first_placement = True
-            
-            while True:
-                # Check if we're out of time
-                elapsed_time = time.time() - start_time
-                remaining_time = time_limit - elapsed_time
+        while True:
+            try:
+                player_board = boards[player_idx]
                 
-                # Send time reminders
-                for reminder_time in reminder_times:
-                    if remaining_time <= reminder_time and reminder_time not in sent_reminders:
-                        send_to_connection(player_idx, f"[TIME] {reminder_time} seconds remaining to place your ships!")
-                        sent_reminders.add(reminder_time)
+                # Set up timer-related variables
+                start_time = time.time()
+                time_limit = 60  # 1 minute in seconds
+                reminder_times = {45, 30, 15, 10, 5}  # Reminders to send
+                sent_reminders = set()  # Track which reminders have been sent
                 
-                # If time is up, place ships randomly
-                if remaining_time <= 0:
-                    send_to_connection(player_idx, "[TIME] Time's up! Placing ships randomly.")
-                    player_board.place_ships_randomly(SHIPS)
-                    send_to_connection(player_idx, "[INFO] Ships placed randomly due to time limit.")
-                    send_board_to_connection(player_idx, player_idx, player_board, True)
-                    break
+                # Send initial instructions
+                send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+                placement = None
                 
-                # If we're not waiting for a specific ship placement input,
-                # wait for initial placement choice (RANDOM/MANUAL)
-                if not manual_placement_started and not waiting_for_placement_input:
-                    waiting_for_placement_input = True
-                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))
-                    waiting_for_placement_input = False
+                # For manual placement, we need to track which ship we're placing
+                current_ship_index = 0
+                ships_to_place = list(SHIPS)  # Make a copy of the ships list
+                manual_placement_started = False
+                waiting_for_placement_input = False
+                first_placement = True
+                
+                while True:
+                    # Check if we're out of time
+                    elapsed_time = time.time() - start_time
+                    remaining_time = time_limit - elapsed_time
                     
-                    # If we got no input, continue the loop to check time again
-                    if placement is None:
-                        continue
+                    # Send time reminders
+                    for reminder_time in reminder_times:
+                        if remaining_time <= reminder_time and reminder_time not in sent_reminders:
+                            send_to_connection(player_idx, f"[TIME] {reminder_time} seconds remaining to place your ships!")
+                            sent_reminders.add(reminder_time)
                     
-                    if placement.lower() == 'quit':
-                        send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
-                        send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
-                        
-                        # Mark this player as not successful
-                        setup_success[player_idx] = False
-                        
-                        # Set this player's ready event
-                        player_ready_events[player_idx].set()
-                        return False
-                    
-                    elif placement.upper() == 'RANDOM':
+                    # If time is up, place ships randomly
+                    if remaining_time <= 0:
+                        send_to_connection(player_idx, "[TIME] Time's up! Placing ships randomly.")
                         player_board.place_ships_randomly(SHIPS)
-                        send_to_connection(player_idx, "[INFO] Ships placed randomly.")
+                        send_to_connection(player_idx, "[INFO] Ships placed randomly due to time limit.")
                         send_board_to_connection(player_idx, player_idx, player_board, True)
                         break
                     
-                    elif placement.upper() == 'MANUAL':
-                        # Start manual placement process
-                        manual_placement_started = True
-                        send_to_connection(player_idx, "[INFO] Placing ships manually:")
-                        current_ship_index = 0
-                    
-                    else:
-                        # Invalid placement option - ask player to try again
-                        send_to_connection(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
-                        continue
-                
-                # Handle manual placement of ships
-                if manual_placement_started:
-                    if current_ship_index >= len(ships_to_place):
-                        # All ships placed successfully
-                        send_board_to_connection(player_idx, player_idx, player_board, True)
-                        send_to_connection(player_idx, "[INFO] All ships placed successfully.")
-                        break
-                    
-                    ship_name, ship_size = ships_to_place[current_ship_index]
-                    
-                    # Show current board state
-                    if first_placement:
-                        send_board_to_connection(player_idx, player_idx, player_board, True)
-                        send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
-                        first_placement = False
-                    
-                    # use select to check the opponent's socket for disconnections
-                    opponent_idx = 1 - player_idx
-                    try:
-                        readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
-                        if readable:
-                            opponent_line = player_rfiles[opponent_idx].readline()
-                            if not opponent_line:
-                                raise ConnectionResetError()
-                    except (ConnectionResetError, OSError):
-                        send_to_connection(player_idx, "[ALERT] Your opponent has lost connection. \n\n")
-                        handle_disconnection(opponent_idx)
-                        setup_success[player_idx] = False
-                        player_ready_events[player_idx].set()
-                        return False
-    
-                    # Wait for placement input with timeout
-                    waiting_for_placement_input = True
-                    placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))  # Poll every 5 seconds max
-                    waiting_for_placement_input = False
-                    
-                    # If we got no input, continue the loop to check time again
-                    if placement is None:
-                        continue
-                    
-                    if placement.lower() == 'quit':
-                        send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
-                        send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                    # If we're not waiting for a specific ship placement input,
+                    # wait for initial placement choice (RANDOM/MANUAL)
+                    if not manual_placement_started and not waiting_for_placement_input:
+                        waiting_for_placement_input = True
+                        placement = recv_from_connection(player_idx, timeout=min(remaining_time, 5))
+                        waiting_for_placement_input = False
                         
-                        # Mark this player as not successful
-                        setup_success[player_idx] = False
-                        
-                        # Set this player's ready event
-                        player_ready_events[player_idx].set()
-                        return False
-                    
-                    try:
-                        parts = placement.strip().split()
-                        if len(parts) != 2:
-                            send_to_connection(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                        # If we got no input, continue the loop to check time again
+                        if placement is None:
                             continue
                         
-                        coord_str, orientation_str = parts
-                        row, col = parse_coordinate(coord_str)
-                        orientation = 0 if orientation_str.upper() == 'H' else 1
+                        if placement.lower() == 'quit':
+                            send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
+                            send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                            
+                            # Mark this player as not successful
+                            setup_success[player_idx] = False
+                            
+                            # Set this player's ready event
+                            player_ready_events[player_idx].set()
+                            return False
                         
-                        if player_board.can_place_ship(row, col, ship_size, orientation):
-                            occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
-                            player_board.placed_ships.append({
-                                'name': ship_name,
-                                'positions': occupied_positions
-                            })
-                            send_to_connection(player_idx, f"[INFO] {ship_name} placed successfully.")
-                            current_ship_index += 1
+                        elif placement.upper() == 'RANDOM':
+                            player_board.place_ships_randomly(SHIPS)
+                            send_to_connection(player_idx, "[INFO] Ships placed randomly.")
+                            send_board_to_connection(player_idx, player_idx, player_board, True)
+                            break
+                        
+                        elif placement.upper() == 'MANUAL':
+                            # Start manual placement process
+                            manual_placement_started = True
+                            send_to_connection(player_idx, "[INFO] Placing ships manually:")
+                            current_ship_index = 0
+                        
                         else:
-                            send_to_connection(player_idx, "[TIP] Cannot place ship there. Try again.")
-                    except ValueError as e:
-                        send_to_connection(player_idx, f"[TIP] Invalid input: {e}")
-                        continue
-            
-            # Signal that this player is ready and wait for other player
-            setup_success[player_idx] = True
-            send_to_connection(player_idx, f"[INFO] Your ships are placed. Waiting for the other player to finish placing their ships...\n")
-            
-            # Update spectators
-            send_to_spectators(f"[INFO] Player {player_idx + 1} has finished placing their ships.\n")
-            
-            player_ready_events[player_idx].set()
-            return True
-            
-        except ConnectionResetError:
-            # Player disconnected
-            send_to_all_others(f"[INFO] Player {player_idx + 1} has lost connection during setup.\n\n", exclude_idx=player_idx)
+                            # Invalid placement option - ask player to try again
+                            send_to_connection(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+                            continue
+                    
+                    # Handle manual placement of ships
+                    if manual_placement_started:
+                        if current_ship_index >= len(ships_to_place):
+                            # All ships placed successfully
+                            send_board_to_connection(player_idx, player_idx, player_board, True)
+                            send_to_connection(player_idx, "[INFO] All ships placed successfully.")
+                            break
+                        
+                        ship_name, ship_size = ships_to_place[current_ship_index]
+                        
+                        # Show current board state
+                        if first_placement:
+                            send_board_to_connection(player_idx, player_idx, player_board, True)
+                            send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
+                            first_placement = False
+                        
+                        # use select to check the opponent's socket for disconnections
+                        opponent_idx = 1 - player_idx
+                        try:
+                            readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
+                            if readable:
+                                opponent_line = player_rfiles[opponent_idx].readline()
+                                if not opponent_line:
+                                    raise ConnectionResetError()
+                        except (ConnectionResetError, OSError):
+                            send_to_connection(player_idx, "[ALERT] Your opponent has lost connection. \n\n")
+                            handle_disconnection(opponent_idx)
+                            setup_success[player_idx] = False
+                            player_ready_events[player_idx].set()
+                            return False
+        
+                        # Wait for placement input with timeout
+                        waiting_for_placement_input = True
+                        placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))  # Poll every 5 seconds max
+                        waiting_for_placement_input = False
+                        
+                        # If we got no input, continue the loop to check time again
+                        if placement is None:
+                            continue
+                        
+                        if placement.lower() == 'quit':
+                            send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
+                            send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
+                            
+                            # Mark this player as not successful
+                            setup_success[player_idx] = False
+                            
+                            # Set this player's ready event
+                            player_ready_events[player_idx].set()
+                            return False
+                        
+                        try:
+                            parts = placement.strip().split()
+                            if len(parts) != 2:
+                                send_to_connection(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
+                                continue
+                            
+                            coord_str, orientation_str = parts
+                            row, col = parse_coordinate(coord_str)
+                            orientation = 0 if orientation_str.upper() == 'H' else 1
+                            
+                            if player_board.can_place_ship(row, col, ship_size, orientation):
+                                occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
+                                player_board.placed_ships.append({
+                                    'name': ship_name,
+                                    'positions': occupied_positions
+                                })
+                                send_to_connection(player_idx, f"[INFO] {ship_name} placed successfully.")
+                                current_ship_index += 1
+                            else:
+                                send_to_connection(player_idx, "[TIP] Cannot place ship there. Try again.")
+                        except ValueError as e:
+                            send_to_connection(player_idx, f"[TIP] Invalid input: {e}")
+                            continue
+                
+                # Signal that this player is ready and wait for other player
+                setup_success[player_idx] = True
+                send_to_connection(player_idx, f"[INFO] Your ships are placed. Waiting for the other player to finish placing their ships...\n")
+                
+                # Update spectators
+                send_to_spectators(f"[INFO] Player {player_idx + 1} has finished placing their ships.\n")
+                
+                player_ready_events[player_idx].set()
+                return True
+                
+            except ConnectionResetError:
+                # Player disconnected
+                send_to_all_others(f"[INFO] Player {player_idx + 1} has lost connection during setup.\n\n", exclude_idx=player_idx)
 
-            handle_disconnection(player_idx)
-            
-            # Mark this player as not successful
-            setup_success[player_idx] = False
-            
-            # Set this player's ready event
-            player_ready_events[player_idx].set()
-            return False
+                if handle_disconnection():
+                    continue # Player reconnected, continue setup
+                
+                # Mark this player as not successful
+                setup_success[player_idx] = False
+                
+                # Set this player's ready event
+                player_ready_events[player_idx].set()
+                return False
     
     # Create and start threads for each player's setup
     setup_threads = []

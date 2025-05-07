@@ -24,7 +24,8 @@ def receive_messages(rfile):
             if not line:
                 print("[INFO] Server disconnected.\n\n")
                 running = False
-                break
+                time.sleep(3)
+                os._exit(1)
                 
             line = line.strip()
             

@@ -34,14 +34,6 @@ def handle_client(conn, addr):
     
     try:
         with connection_lock:
-            if game_in_progress:
-                # Game already in progress, reject connection
-                reject_file = conn.makefile('w')
-                reject_file.write("[INFO] Sorry, a game is already in progress. Please try again later.\n\n")
-                reject_file.flush()
-                conn.close()
-                return
-            
             if len(active_player_connections) + len(spectator_connections) >= MAX_CONNECTIONS:
                 # Too many connections, reject connection
                 reject_file = conn.makefile('w')
@@ -53,7 +45,13 @@ def handle_client(conn, addr):
             # Setup file handlers for the connection
             rfile = conn.makefile('r')
             wfile = conn.makefile('w')
-            
+
+            for i, c in active_player_connections:
+                if c == -1:
+                    # A player has disconnected, insert this connection in their place
+                    active_player_connections[i] = (conn, addr, rfile, wfile, (i + 1))
+                    break
+
             # Determine if this is an active player or spectator
             is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
             
@@ -364,7 +362,7 @@ def run_game_session(active_player_connections, spectator_connections):
                 pass
         
         # Run the multiplayer game (passing both player files and spectator wfiles)
-        run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles)
+        run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles, active_player_connections)
         
         # Game has ended - notify all connections
         for wfile in player_wfiles + spectator_wfiles:
