@@ -50,6 +50,7 @@ def handle_client(conn, addr):
                 if i == -1:
                     # A player has disconnected, insert this connection in their place
                     active_player_connections[i] = (conn, addr, rfile, wfile, (i + 1))
+                    wfile.write(f"[INFO] Welcome back! You are Active Player {i + 1}.\n\n")
                     break
 
             # Determine if this is an active player or spectator
