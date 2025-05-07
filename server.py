@@ -34,14 +34,6 @@ def handle_client(conn, addr):
     
     try:
         with connection_lock:
-            if game_in_progress:
-                # Game already in progress, reject connection
-                reject_file = conn.makefile('w')
-                reject_file.write("[INFO] Sorry, a game is already in progress. Please try again later.\n\n")
-                reject_file.flush()
-                conn.close()
-                return
-            
             if len(active_player_connections) + len(spectator_connections) >= MAX_CONNECTIONS:
                 # Too many connections, reject connection
                 reject_file = conn.makefile('w')
@@ -303,14 +295,10 @@ def start_game_countdown():
             # Set the event to notify waiting threads
             game_ready_event.set()
             
-            # Collect players' and spectators' connection info
-            active_connections = active_player_connections.copy()
-            spectator_conns = spectator_connections.copy()
-        
         # Start the game in a new thread
         game_thread = threading.Thread(
             target=run_game_session,
-            args=(active_connections, spectator_conns)
+            args=(active_player_connections, spectator_connections)
         )
         game_thread.daemon = True
         game_thread.start()
