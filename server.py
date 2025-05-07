@@ -25,9 +25,9 @@ game_in_progress_lock = threading.Lock()
 game_ready_event = threading.Event()
 countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
+player_disconnected = [False, -1] # Track if a player has disconnected]
 
 def handle_client(conn, addr):
-    # Handle a client connection by adding it to the appropriate connection list.
     global game_in_progress, active_player_connections, spectator_connections, countdown_timer_running
     
     print(f"[INFO] New connection from {addr}\n")
@@ -46,30 +46,35 @@ def handle_client(conn, addr):
             rfile = conn.makefile('r')
             wfile = conn.makefile('w')
 
+            # Check for reconnection
+            reconnected = False
             for i in active_player_connections:
-                if i == -1:
-                    # A player has disconnected, insert this connection in their place
-                    active_player_connections[i] = (conn, addr, rfile, wfile, (i + 1))
-                    wfile.write(f"[INFO] Welcome back! You are Active Player {i + 1}.\n\n")
+                if player_disconnected[0] == True:  # Placeholder for a disconnected player
+                    active_player_connections[player_disconnected[1]] = (conn, addr, rfile, wfile, player_num)
+                    wfile.write(f"[INFO] Welcome back! You are Active Player {player_num}.\n\n")
+                    reconnected = True
+                    player_disconnected[0] = False  # Reset the flag
+                    player_disconnected[1] = -1  # Reset the index
                     break
 
-            # Determine if this is an active player or spectator
-            is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
-            
-            if is_active_player:
-                # Active player - gets to play the game
-                player_num = len(active_player_connections) + 1
-                active_player_connections.append((conn, addr, rfile, wfile, player_num))
-                wfile.write(f"[INFO] Welcome! You are Active Player {player_num}.\n\n")
+            if not reconnected:
+                # Determine if this is an active player or spectator
+                is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
                 
-                if player_num < ACTIVE_PLAYERS:
-                    wfile.write(f"[INFO] Waiting for Player 2 to connect...\n\n")
-            else:
-                # Spectator - can only watch
-                spectator_num = len(spectator_connections) + 1
-                spectator_connections.append((conn, addr, rfile, wfile, spectator_num))
-                wfile.write(f"[INFO] Welcome! You are Spectator {spectator_num}.\n\n")
-                wfile.write(f"[INFO] Active players: {len(active_player_connections)}/{ACTIVE_PLAYERS}. You will be able to watch the game but not participate.\n\n")
+                if is_active_player:
+                    # Active player - gets to play the game
+                    player_num = len(active_player_connections) + 1
+                    active_player_connections.append((conn, addr, rfile, wfile, player_num))
+                    wfile.write(f"[INFO] Welcome! You are Active Player {player_num}.\n\n")
+                    
+                    if player_num < ACTIVE_PLAYERS:
+                        wfile.write(f"[INFO] Waiting for Player 2 to connect...\n\n")
+                else:
+                    # Spectator - can only watch
+                    spectator_num = len(spectator_connections) + 1
+                    spectator_connections.append((conn, addr, rfile, wfile, spectator_num))
+                    wfile.write(f"[INFO] Welcome! You are Spectator {spectator_num}.\n\n")
+                    wfile.write(f"[INFO] Active players: {len(active_player_connections)}/{ACTIVE_PLAYERS}. You will be able to watch the game but not participate.\n\n")
             
             wfile.write("[TIP] Type 'quit' to exit.\n\n")
             wfile.flush()
