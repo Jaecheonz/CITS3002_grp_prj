@@ -731,8 +731,29 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             # Handle player disconnection
             opponent_idx = 1 if player_idx == 0 else 0
             
-            send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} disconnected. You win by default!\n\n")
-            send_to_spectators(f"[INFO] Player {player_idx + 1} disconnected. Player {opponent_idx + 1} wins by default!\n\n")
+            send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")
+            send_to_spectators(f"[INFO] Player {player_idx + 1} has lost connection. Awaiting reconnect... \n\n")            
+
+            # Wait for the player to reconnect
+            timeout = 60  # 1 minute to reconnect
+            start_time = time.time()
+            reconnected = False
+            while time.time() - start_time < timeout:
+                time.sleep(1)  # Wait for a second before checking again
+                # Check if the player has reconnected (this logic depends on your implementation)
+                if player_idx in player_indices:  # Assuming player_indices is updated on reconnection
+                    reconnected = True
+                    send_to_connection(opponent_idx, f"[INFO] Player {player_idx + 1} has reconnected. Resuming game...\n\n")
+                    send_to_spectators(f"[INFO] Player {player_idx + 1} has reconnected. Resuming game...\n\n")
+                    break
+    
+            if not reconnected:
+                # Player did not reconnect in time
+                send_to_all_others(f"[INFO] Player {player_idx + 1} did not reconnect in time. Game canceled.\n\n", exclude_idx=player_idx)
+                
+                # Mark this player as disconnected
+                if player_idx in player_indices:
+                    player_indices.remove(player_idx)
             
             return False
     
