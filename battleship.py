@@ -289,7 +289,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             
             return False
     
-    def handle_input_during_turn(player_idx, turn_timeout=15):
+    def handle_input_during_turn(player_idx, turn_timeout=30):
         # Keep track of which connections have already been warned
         warned_connections = set()
 
