@@ -29,58 +29,71 @@ countdown_timer_lock = threading.Lock()
 reconnecting = False
 
 
-def monitor_connections(active_player_connections, spectator_connections):
+def monitor_connections(spectator_connections): 
+    #monitors connections during the game phase
+    global active_player_connections
     global game_in_progress
     global reconnecting
-
     try:
         while game_in_progress:
-            with connection_lock:
-                # Check active player connections
-                for i in range(len(active_player_connections) - 1, -1, -1):
-                    conn, addr, _, _, player_num = active_player_connections[i]
-                    try:
-                        # Test if the connection is still alive
-                        conn.send(b'\0')  # Send a null byte
-                    except:
-                        reconnecting = True
-                        disconnected_player_num = player_num  # Store the player number
-                        print(f"[INFO] Player {disconnected_player_num} ({addr}) has lost connection.")
-                        del active_player_connections[i]
-                        reconnecting = True  # Set reconnecting flag
+            # Check active player connections
+            for i in range(len(active_player_connections) - 1, -1, -1):
+                conn, addr, _, _, player_num = active_player_connections[i]
+                try:
+                    # Test if the connection is still alive
+                    conn.send(b'\0')  # Send a null byte
+                except:
+                    reconnecting = True # Set reconnecting flag
+                    del_player_num = player_num # Store the player number for reconnecting
+                    print(f"[INFO] Player {del_player_num} ({addr}) has lost connection.")
+                    del active_player_connections[i]
+                    # Notify remaining connections
+                    for _, _, _, wf, _ in active_player_connections + spectator_connections:
+                        wf.write(f"[INFO] Player {del_player_num} has lost connection. Awaiting reconnect...\n\n")
+                        wf.flush()
+                    # Start a thread to wait for reconnection
+                    reconnect_thread = threading.Thread(target=reconnect_player, args=(del_player_num,))
+                    reconnect_thread.daemon = True
+                    reconnect_thread.start()
+                    reconnect_thread.join()
 
-                        # Notify remaining connections
-                        for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                            wf.write(f"[INFO] Player {player_num} has lost connection. Awaiting reconnect...\n\n")
-                            wf.flush()
+            #check spectator connections
+            for i in range(len(spectator_connections) - 1, -1, -1):
+                conn, addr, _, _, spectator_num = spectator_connections[i]
+                try:
+                    # Test if the connection is still alive
+                    conn.send(b'\0')  # Send a null byte
+                except:
+                    print(f"[INFO] Spectator {spectator_num} ({addr}) has lost connection.")
+                    del spectator_connections[i]
 
-                #check spectator connections
-                for i in range(len(spectator_connections) - 1, -1, -1):
-                    conn, addr, _, _, spectator_num = spectator_connections[i]
-                    try:
-                        # Test if the connection is still alive
-                        conn.send(b'\0')  # Send a null byte
-                    except:
-                        print(f"[INFO] Spectator {spectator_num} ({addr}) has lost connection.")
-                        del spectator_connections[i]
-
-            if reconnecting:
-                # Wait for CONNECTION_TIMEOUT seconds for a new connection
-                start_time = time.time()
-                while time.time() - start_time < CONNECTION_TIMEOUT:
-                    if len(active_player_connections) < ACTIVE_PLAYERS:
-                        time.sleep(1)  # Check every second
-                    else:
-                        # If player reconnects, break out of the loop
-                        print(f"[INFO] Player {disconnected_player_num} has reconnected.")
-                        reconnecting = False
-                        break
-
-            time.sleep(1)  # Check connections every second
             print(f"[INFO] Monitoring connections... {len(active_player_connections)} active players, {len(spectator_connections)} spectators.\n")
-
+            time.sleep(1)  # Check connections every second
     except Exception as e:
         print(f"[ERROR] Connection monitoring error: {e}")
+
+def reconnect_player(disconnected_player_num):
+    global reconnecting
+    global active_player_connections
+    global spectator_connections
+
+    if reconnecting:
+        # Wait for CONNECTION_TIMEOUT seconds for a new connection
+        start_time = time.time()
+        while time.time() - start_time < CONNECTION_TIMEOUT:
+            if len(active_player_connections) < ACTIVE_PLAYERS and reconnecting:
+                time.sleep(1)  # Check every second
+            else:
+                # If player reconnects, break out of the loop
+                print(f"[INFO] Player {disconnected_player_num} has reconnected.")
+                reconnecting = False
+                break
+    if reconnecting:
+        # If the player didn't reconnect in time, notify all connections and exit game
+        for _, _, _, wf, _ in active_player_connections + spectator_connections:
+            wf.write(f"[INFO] Player {disconnected_player_num} did not reconnect in time. Not enough players to continue.\n\n")
+            wf.flush()
+    
 
 def handle_client(conn, addr):
     # Handle a client connection by adding it to the appropriate connection list.
