@@ -30,12 +30,6 @@ reconnect_event = threading.Event()
 reconnect_event.set()
 reconnecting = False
 
-# Global lists to store file handlers for active players and spectators
-player_rfiles = [] 
-player_wfiles = []  
-spectator_rfiles = [] 
-spectator_wfiles = []  
-
 def monitor_connections(): 
     #monitors connections during the game phase
     global active_player_connections, game_in_progress, reconnecting, spectator_connections
@@ -53,9 +47,8 @@ def monitor_connections():
                     reconnecting = True # Set reconnecting flag
                     del_player_num = player_num # Store the player number for reconnecting
                     print(f"[INFO] Player {del_player_num} ({addr}) has lost connection.")
-                    active_player_connections[i] = -1
-                    player_rfiles[i] = -1
-                    player_wfiles[i] = -1
+                    del active_player_connections[i]
+
                     # Notify remaining connections
                     for _, _, _, wf, _ in active_player_connections + spectator_connections:
                         wf.write(f"[INFO] Player {del_player_num} has lost connection. Awaiting reconnect...\n\n")
@@ -78,9 +71,7 @@ def monitor_connections():
                     conn.send(b'\0')  # Send a null byte
                 except:
                     print(f"[INFO] Spectator {spectator_num} ({addr}) has lost connection.")
-                    spectator_connections[i] = -1
-                    spectator_rfiles[i] = -1 # Remove the corresponding rfile from the list
-                    spectator_wfiles[i] = -1 # Remove the corresponding wfile from the list
+                    del spectator_connections[i]
 
             print(f"[INFO] Monitoring connections... {len(active_player_connections)} active players, {len(spectator_connections)} spectators.\n")
             time.sleep(1)  # Check connections every second
@@ -118,8 +109,7 @@ def reconnect_player(disconnected_player_num):
 def handle_client(conn, addr):
     # Handle a client connection by adding it to the appropriate connection list.
     global game_in_progress, active_player_connections, spectator_connections, countdown_timer_running, reconnecting
-    global player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles
-    
+ 
     print(f"[INFO] New connection from {addr}\n")
     
     try:
@@ -137,25 +127,13 @@ def handle_client(conn, addr):
             wfile = conn.makefile('w')
             
             # Determine if this is an active player or spectator
-            is_active_player = len(active_player_connections) < ACTIVE_PLAYERS or any(player == -1 for player in active_player_connections)
+            is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
 
             if is_active_player and reconnecting:
                 # Active player reconnecting - get the player number from the list
                 player_num = 3 - active_player_connections[0][4] # Assuming player numbers are 1 and 2 calculate the reconnecting player number
-                # Replace the element if it's equal to -1, otherwise append
-                replaced = False
-                for i in range(len(active_player_connections)):
-                    if active_player_connections[i] == -1:
-                        active_player_connections[i] = (conn, addr, rfile, wfile, player_num)
-                        player_rfiles[i] = rfile  # Replace the rfile in the list
-                        player_wfiles[i] = wfile  # Replace the wfile in the list
-                        replaced = True
-                        break
-                if not replaced:
-                    active_player_connections.append((conn, addr, rfile, wfile, player_num))
-                    player_rfiles.append(rfile)  # Add the rfile to the list
-                    player_wfiles.append(wfile)  # Add the wfile to the list
-                wfile.write(f"[INFO] Welcome back player {player_num}!.\n\n")
+                active_player_connections.append(conn, addr, rfile, wfile, player_num)
+                wfile.write(f"[INFO] Welcome back! You are Active Player {player_num}.\n\n")
                 reconnecting = False # Reset reconnecting flag
 
             elif is_active_player:
@@ -200,7 +178,7 @@ def handle_client(conn, addr):
                         for _, _, _, wf, _ in active_player_connections + spectator_connections:
                             wf.write(f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
                             wf.write(f"[INFO] Currently {len(spectator_connections)} spectators connected.\n\n")
-                            wf.write("[INFO] More spectators can still join before the game starts.\n\n")
+                            wf.write("[INFO] More spectators can still join after the game starts.\n\n")
                             wf.flush()
                         
                         # Start a countdown timer in a new thread
@@ -429,8 +407,7 @@ def run_game_session(active_player_connections, spectator_connections):
     # Args:
     #     active_player_connections: List of (conn, addr, rfile, wfile, player_num) tuples for active players
     #     spectator_connections: List of (conn, addr, rfile, wfile, spectator_num) tuples for spectators
-    global game_in_progress, player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles
-    
+    """
     try:
         # Extract the rfiles and wfiles for active players (for game interaction)
         for _, _, rfile, wfile, _ in active_player_connections:
@@ -441,30 +418,30 @@ def run_game_session(active_player_connections, spectator_connections):
         for _, _, rfile, wfile, _ in spectator_connections:
             spectator_rfiles.append(rfile)
             spectator_wfiles.append(wfile)
-        
+        """
+    try:
         # Notify all connections that the game is starting
         spectator_count = len(spectator_connections)
         
         # Notify active players
-        for wfile in player_wfiles:
-            try:
-                wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
-                wfile.write("[INFO] You are an active player - you can make moves.\n\n")
-                wfile.flush()
-            except:
-                pass
+        for _, _, _, wfile, _ in active_player_connections:
+            wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
+            wfile.write("[INFO] You are an active player - you can make moves.\n\n")
+            wfile.flush()
+            
         
         # Notify spectators
-        for wfile in spectator_wfiles:
+        for _, _, _, wfile, _ in spectator_connections:
             try:
                 wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
                 wfile.write("[INFO] You are a spectator - you can only watch the game.\n\n")
                 wfile.flush()
             except:
+                print(f"[ERROR] Failed to notify spectator about game start. \n\n")
                 pass
         
         # Run the multiplayer game (passing both player files and spectator wfiles)
-        run_multiplayer_game_online(reconnect_event, player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles)
+        run_multiplayer_game_online(reconnect_event, active_player_connections, spectator_connections)
         
         # Game has ended - notify all connections
         for wfile in player_wfiles + spectator_wfiles:
@@ -494,8 +471,7 @@ def run_game_session(active_player_connections, spectator_connections):
         
         # Reset game state
         with game_in_progress_lock:
-            game_in_progress = False
-        game_ready_event.clear()
+            game_ready_event.clear()
         
         # Clear the global connection lists
         with connection_lock:
