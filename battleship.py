@@ -183,13 +183,14 @@ def parse_coordinate(coord_str):
 
     return (row, col)
 
-def run_multiplayer_game_online(reconnect_event, player_rfiles, player_wfiles, spectator_wfiles=None):
+def run_multiplayer_game_online(reconnect_event, player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles):
     """
     Run a Battleship game with 2 players and optional spectators.
     
     Args:
-        player_rfiles: List of read file objects for players/spectators
-        player_wfiles: List of write file objects for players/spectators
+        reconnect_event: A threading.Event object used to handle player reconnections.
+        player_rfiles: List of read file objects for players/spectators.
+        player_wfiles: List of write file objects for players/spectators.
     """
     total_connections = len(player_rfiles)
     if total_connections < 2:
@@ -201,11 +202,7 @@ def run_multiplayer_game_online(reconnect_event, player_rfiles, player_wfiles, s
     spectator_indices = list(range(2, total_connections))
     
     def send_to_connection(conn_idx, msg):
-        if reconnect_event.is_set():
-            print("[INFO] Waiting for a player to reconnect...\n")
-        while reconnect_event.is_set():
-            time.sleep(1)  # Wait for reconnection
-        # Send a message to a specific connection (player or spectator)
+        reconnect_event.wait()  # Wait for reconnection event
         try:
             wfile = player_wfiles[conn_idx]
             # Check if the file is still valid/open
@@ -217,14 +214,12 @@ def run_multiplayer_game_online(reconnect_event, player_rfiles, player_wfiles, s
             return True
         except (BrokenPipeError, ConnectionError, ConnectionResetError, IOError) as e:
             print(f"[ERROR] Failed to send message to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
-            '''
             # Handle disconnection based on if it's a player or spectator
             if conn_idx in player_indices:
                 player_indices.remove(conn_idx)
                 send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
             elif conn_idx in spectator_indices:
                 spectator_indices.remove(conn_idx)
-            '''
     
     def send_to_all_others(msg, exclude_idx=None):
         # Send a message to all connections except excluded ones
