@@ -7,6 +7,7 @@ import threading
 import select
 import time
 import utils  # Import utils module for checksum functions
+import base64
 from battleship import run_multiplayer_game_online
 
 HOST = '127.0.0.1'
@@ -31,15 +32,17 @@ countdown_timer_lock = threading.Lock()
 def send_message(conn, message):
     try:
         if isinstance(message, str):
-            message_bytes = message.encode()
+            message_bytes = message.encode('utf-8')
         else:
             message_bytes = message
         
-        # Add checksum to the message
         packet = utils.add_checksum(message_bytes)
         
-        # Send the packet with checksum
-        conn.sendall(packet)
+        packet_b64 = base64.b64encode(packet)
+        packet_str = packet_b64.decode('ascii')
+        
+        conn.sendall(packet_str.encode('utf-8'))
+
         return True
     except Exception as e:
         print(f"[ERROR] Failed to send message: {e}")
@@ -49,7 +52,7 @@ def safe_send(wfile, message):
     try:
         wfile.write(message)
         wfile.flush()
-        time.sleep(0.01)  # Add small delay to avoid overwhelming the stream
+        time.sleep(0.01)
     except Exception as e:
         print(f"[WARNING] Failed to send message: {e}")
 

@@ -8,6 +8,7 @@ import threading
 import select
 import time
 import utils
+import base64
 
 BOARD_SIZE = 10
 SHIPS = [
@@ -195,42 +196,19 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     
     
     def send_to_connection(conn_idx, msg):
+        # Send a message to a specific connection (player or spectator)
         try:
             wfile = player_wfiles[conn_idx]
+            # Check if the file is still valid/open
             if wfile.closed:
                 raise BrokenPipeError("File already closed")
-            is_binary_mode = hasattr(wfile, 'mode') and 'b' in wfile.mode
-            if is_binary_mode:
-                if isinstance(msg, str):
-                    msg_bytes = msg.encode('utf-8')
-                else:
-                    msg_bytes = msg
-                packet_with_checksum = utils.add_checksum(msg_bytes)
-                wfile.write(packet_with_checksum + b'\n')
-            else:
-                if isinstance(msg, bytes):
-                    msg_str = msg.decode('utf-8')
-                else:
-                    msg_str = msg
-                wfile.write(msg_str + '\n')
             
-            # Only change: Add try/except around flush to handle binary data errors
-            try:
-                wfile.flush()
-            except TypeError:
-                # If flush fails because of binary/text mismatch, just continue
-                # The data was already written successfully
-                pass
-                
+            wfile.write(msg + '\n')
+            wfile.flush()
             return True
         except (BrokenPipeError, ConnectionError, ConnectionResetError, IOError) as e:
             print(f"[ERROR] Failed to send message to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
-            if conn_idx in player_indices:
-                player_indices.remove(conn_idx)
-                send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
-            elif conn_idx in spectator_indices:
-                spectator_indices.remove(conn_idx)
-                    
+            
             return False
 
     def send_to_all_others(msg, exclude_idx=None):
@@ -257,41 +235,33 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
 
     def send_board_to_connection(conn_idx, board_idx, board, show_hidden=False):
         try:
-            print(f"[DEBUG] Sending board to connection {conn_idx} (Board Index: {board_idx})")
             wfile = player_wfiles[conn_idx]
-            print(f"[DEBUG] wfile.closed: {wfile.closed}")
             is_own_board = conn_idx == board_idx
             if conn_idx in player_indices:
                 board_owner = "Your" if is_own_board else "Opponent's"
             else:
                 board_owner = f"Player {board_idx + 1}'s"
-            print(f"[DEBUG] Board Owner Label: {board_owner}")
+
             board_msg = f"{board_owner} Grid:\n"
             grid_to_show = board.hidden_grid if show_hidden else board.display_grid
-            print(f"[DEBUG] grid_to_show: {'hidden' if show_hidden else 'display'} grid")
-            print(f"[DEBUG] Grid size: {board.size}")
-            print(f"[DEBUG] Grid to show:")
-            for r in range(board.size):
-                print(f"[DEBUG] Row {r}: {grid_to_show[r]}")
             board_msg += "+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n'
             for r in range(board.size):
                 row_label = chr(ord('A') + r)
                 row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
                 board_msg += f"{row_label:2} {row_str}\n"
             board_msg += '\n'
-            print(f"[DEBUG] Full board message: {board_msg}")
             board_bytes = board_msg.encode('utf-8')
-            print(f"[DEBUG] Encoded message bytes: {board_bytes}")
             packet_with_checksum = utils.add_checksum(board_bytes)
-            print(f"[DEBUG] Packet with checksum: {packet_with_checksum}")
-            wfile.write(packet_with_checksum)
+            encoded_packet = base64.b64encode(packet_with_checksum).decode('utf-8')
+            wfile.write(encoded_packet + '\n')  # Add newline if you expect to read lines
             try:
                 if hasattr(wfile, 'flush') and callable(wfile.flush):
                     wfile.flush()
             except TypeError as e:
                 print(f"[WARNING] TypeError during flush: {e}. This is likely due to a type mismatch between what flush() expects and what's in the buffer.")
-            print(f"[DEBUG] Board successfully sent to {board_owner} (Connection {conn_idx})")
+
             return True
+
         except (BrokenPipeError, ConnectionError) as e:
             print(f"[ERROR] Failed to send board to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
             if conn_idx in player_indices:
@@ -300,6 +270,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             elif conn_idx in spectator_indices:
                 spectator_indices.remove(conn_idx)
             return False
+
 
     def handle_input_during_turn(player_idx, turn_timeout=15):
         warned_connections = set()
@@ -419,7 +390,7 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
         try:
             player_board = boards[player_idx]
             start_time = time.time()
-            time_limit = 60  # 1 minute in seconds
+            time_limit = 5  # 1 minute in seconds
             reminder_times = {45, 30, 15, 10, 5}  # Reminders to send
             sent_reminders = set()  # Track which reminders have been sent
             send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships!")
@@ -568,11 +539,6 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     current_player_idx = 0
     
     def handle_player_turn(player_idx, is_retry=False):
-        # Handle a player's turn.
-        # Returns:
-        #     True: Turn completed successfully
-        #     False: Game should end
-        #     None: Invalid move, retry
         try:
             # First, show both boards to the current player
             send_to_connection(player_idx, "Your board:")

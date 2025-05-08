@@ -7,6 +7,7 @@ import threading
 import os
 import time
 import utils
+import base64
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -20,18 +21,27 @@ def receive_messages(sock):
     global running, game_phase
     grid_mode = False
     try:
+        grid_mode = False
+
         while running:
             full_packet = sock.recv(4096)
             if not full_packet:
                 print("[INFO] Server disconnected.\n\n")
                 running = False
                 break
+            
+            try:
+                base64_str = full_packet.decode('utf-8').strip()  # From bytes to str
+                decoded_packet = base64.b64decode(base64_str)     # Base64 decode back to bytes
+            except Exception as e:
+                print(f"[WARNING] Failed to decode base64 packet: {e}")
+                continue  # Skip this broken packet
 
-            if not utils.verify_checksum(full_packet):
+            if not utils.verify_checksum(decoded_packet):
                 print("[WARNING] Corrupted packet received. Discarding...")
                 continue  # Skip this corrupted packet
 
-            data = utils.strip_checksum(full_packet)
+            data = utils.strip_checksum(decoded_packet)
             lines = data.decode().splitlines()
 
             for line in lines:
@@ -45,7 +55,13 @@ def receive_messages(sock):
                         # Empty line means grid transmission done
                         grid_mode = False
                         continue
-                    print(line)
+
+                    # If grid_mode is true, it means we need to decode the base64 grid data.
+                    try:
+                        grid_line = base64.b64decode(line).decode('utf-8')  # Decode each grid line (base64 -> utf-8)
+                        print(grid_line)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to decode grid line: {e}")
                     continue
 
                 # Normal message handling
