@@ -14,10 +14,11 @@ PORT = 5000
 # Flag to control the message receiving thread
 running = True
 # Variable to track the game phase
-game_phase = "setup"  # Can be "setup" or "gameplay"
+game_phase = "setup"
 
 def receive_messages(sock):
     global running, game_phase
+    grid_mode = False
     try:
         while running:
             full_packet = sock.recv(4096)
@@ -25,46 +26,60 @@ def receive_messages(sock):
                 print("[INFO] Server disconnected.\n\n")
                 running = False
                 break
-            
+
             if not utils.verify_checksum(full_packet):
                 print("[WARNING] Corrupted packet received. Discarding...")
                 continue  # Skip this corrupted packet
-            
-            data = utils.strip_checksum(full_packet)
-            line = data.decode().strip()
-            
-            # The rest of your line processing logic stays the same
-            if "GAME PHASE" in line:
-                game_phase = "gameplay"
-                print("[INFO] Entered gameplay phase.\n")
 
-            if line.endswith("Grid:"):
-                print(f"\n[{line}]")
-                # NOTE: Here you must assume multiple packets or structure change to receive board lines.
-                # We'll assume simple text for now.
-            else:
+            data = utils.strip_checksum(full_packet)
+            lines = data.decode().splitlines()
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                if grid_mode:
+                    # We are currently receiving a grid
+                    if line == "":
+                        # Empty line means grid transmission done
+                        grid_mode = False
+                        continue
+                    print(line)
+                    continue
+
+                # Normal message handling
+                if "GAME PHASE" in line:
+                    game_phase = "gameplay"
+                    print("[INFO] Entered gameplay phase.\n")
+
+                if line.endswith("Grid:"):
+                    print(f"\n[{line}]")
+                    grid_mode = True
+                    continue
+
                 print(line)
-            
-            if any(phrase in line for phrase in [
-                "Game has ended",
-                "Game canceled",
-                "Game start canceled",
-                "You win!",
-                "You are eliminated",
-                "wins the game",
-                "You are the last player standing"
-            ]):
-                print("\n[INFO] Game has ended. Exiting...\n")
-                running = False
-                time.sleep(3)
-                os._exit(0)
-            
-            if any(phrase in line for phrase in [
-                "forfeited",
-                "disconnected",
-                "Not enough players"
-            ]):
-                print("\n[INFO] A player has left the game.")
+
+                if any(phrase in line for phrase in [
+                    "Game has ended",
+                    "Game canceled",
+                    "Game start canceled",
+                    "You win!",
+                    "You are eliminated",
+                    "wins the game",
+                    "You are the last player standing"
+                ]):
+                    print("\n[INFO] Game has ended. Exiting...\n")
+                    running = False
+                    time.sleep(3)
+                    os._exit(0)
+
+                if any(phrase in line for phrase in [
+                    "forfeited",
+                    "disconnected",
+                    "Not enough players"
+                ]):
+                    print("\n[INFO] A player has left the game.")
 
     except Exception as e:
         print(f"[ERROR] Exception in receive thread: {e}")

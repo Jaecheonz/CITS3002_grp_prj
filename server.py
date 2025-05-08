@@ -45,6 +45,14 @@ def send_message(conn, message):
         print(f"[ERROR] Failed to send message: {e}")
         return False
 
+def safe_send(wfile, message):
+    try:
+        wfile.write(message)
+        wfile.flush()
+        time.sleep(0.01)  # Add small delay to avoid overwhelming the stream
+    except Exception as e:
+        print(f"[WARNING] Failed to send message: {e}")
+
 # Custom receive function to verify checksums
 def receive_message(conn, buffer_size=4096):
     try:
@@ -115,222 +123,164 @@ class ChecksumFile:
     def closed(self):
         return self._closed
 
+def cleanup_connection(conn, player_quit=False):
+    with connection_lock:
+        for conn_list in [active_player_connections, spectator_connections]:
+            for i, (c, _, rfile, wfile, _) in enumerate(conn_list):
+                if c == conn:
+                    try:
+                        rfile.close()
+                    except:
+                        pass
+                    try:
+                        wfile.close()
+                    except:
+                        pass
+                    conn_list.pop(i)
+                    break
+    try:
+        conn.close()
+    except:
+        pass
+
+def handle_quit(conn):
+    """Handle client quitting while waiting."""
+    with connection_lock:
+        removed_from_active = False
+        for i, (c, _, rfile, wfile, num) in enumerate(active_player_connections):
+            if c == conn:
+                print(f"[INFO] Active Player {num} quit.\n\n")
+                active_player_connections.pop(i)
+                removed_from_active = True
+                break
+        
+        if not removed_from_active:
+            for i, (c, _, rfile, wfile, num) in enumerate(spectator_connections):
+                if c == conn:
+                    print(f"[INFO] Spectator {num} quit.\n\n")
+                    spectator_connections.pop(i)
+                    break
+        
+        if removed_from_active:
+            game_ready_event.clear()
+            for _, _, _, wf, _ in active_player_connections + spectator_connections:
+                safe_send(wf, "[INFO] A player left. Game start cancelled.\n\n")
+                safe_send(wf, "[INFO] Disconnecting all connections. Please reconnect.\n\n")
+
+            # Close all
+            connections_to_close = active_player_connections + spectator_connections
+            active_player_connections.clear()
+            spectator_connections.clear()
+            
+            for c, _, rfile, wfile, _ in connections_to_close:
+                try:
+                    rfile.close()
+                except:
+                    pass
+                try:
+                    wfile.close()
+                except:
+                    pass
+                try:
+                    c.close()
+                except:
+                    pass
+
+    try:
+        conn.close()
+    except:
+        pass
+
 def handle_client(conn, addr):
-    # Handle a client connection by adding it to the appropriate connection list.
     global game_in_progress, active_player_connections, spectator_connections, countdown_timer_running
     
     print(f"[INFO] New connection from {addr}\n")
     
     try:
         with connection_lock:
-            if game_in_progress:
-                # Game already in progress, reject connection
-                message = "[INFO] Sorry, a game is already in progress. Please try again later.\n\n"
-                send_message(conn, message)
-                conn.close()
-                return
-            
             if len(active_player_connections) + len(spectator_connections) >= MAX_CONNECTIONS:
-                # Too many connections, reject connection
-                message = f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_CONNECTIONS}). Please try again later.\n\n"
-                send_message(conn, message)
+                # Too many connections
+                send_message(conn, f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_CONNECTIONS}). Please try again later.\n\n")
                 conn.close()
                 return
             
-            # Setup file handlers for the connection using our checksum wrappers
+            # Wrap the connection with checksum file handlers
             rfile = ChecksumFile(conn, 'r')
             wfile = ChecksumFile(conn, 'w')
             
-            # Determine if this is an active player or spectator
             is_active_player = len(active_player_connections) < ACTIVE_PLAYERS
-            
             if is_active_player:
-                # Active player - gets to play the game
                 player_num = len(active_player_connections) + 1
                 active_player_connections.append((conn, addr, rfile, wfile, player_num))
-                wfile.write(f"[INFO] Welcome! You are Active Player {player_num}.\n\n")
+                safe_send(wfile, f"[INFO] Welcome! You are Active Player {player_num}.\n\n")
                 
                 if player_num < ACTIVE_PLAYERS:
-                    wfile.write(f"[INFO] Waiting for Player 2 to connect...\n\n")
+                    safe_send(wfile, f"[INFO] Waiting for Player 2 to connect...\n\n")
             else:
-                # Spectator - can only watch
                 spectator_num = len(spectator_connections) + 1
                 spectator_connections.append((conn, addr, rfile, wfile, spectator_num))
-                wfile.write(f"[INFO] Welcome! You are Spectator {spectator_num}.\n\n")
-                wfile.write(f"[INFO] Active players: {len(active_player_connections)}/{ACTIVE_PLAYERS}. You will be able to watch the game but not participate.\n\n")
+                safe_send(wfile, f"[INFO] Welcome! You are Spectator {spectator_num}.\n\n")
+                safe_send(wfile, f"[INFO] Active players: {len(active_player_connections)}/{ACTIVE_PLAYERS}. You will be able to watch the game but not participate.\n\n")
             
-            wfile.write("[TIP] Type 'quit' to exit.\n\n")
-            wfile.flush()
+            safe_send(wfile, "[TIP] Type 'quit' to exit.\n\n")
             
-            # Notify all other clients about the new connection
+            # Notify other clients
             total_connected = len(active_player_connections) + len(spectator_connections)
             connection_type = "Active Player" if is_active_player else "Spectator"
             connection_num = player_num if is_active_player else spectator_num
-            
+
             for c, _, _, wf, _ in active_player_connections + spectator_connections:
                 if c != conn:
-                    try:
-                        wf.write(f"[INFO] {connection_type} {connection_num} has joined. ({total_connected}/{MAX_CONNECTIONS} total connections)\n\n")
-                        wf.flush()
-                    except:
-                        pass
+                    safe_send(wf, f"[INFO] {connection_type} {connection_num} has joined. ({total_connected}/{MAX_CONNECTIONS} total connections)\n\n")
             
-            # Check if we have both active players to start a game
+            # Check if ready to start countdown
             if len(active_player_connections) == ACTIVE_PLAYERS and not game_in_progress:
                 with countdown_timer_lock:
-                    # Only announce and start timer if not already running
                     if not countdown_timer_running:
                         countdown_timer_running = True
-                        
-                        # We have both active players, announce game will start soon
                         for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                            wf.write(f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
-                            wf.write(f"[INFO] Currently {len(spectator_connections)} spectators connected.\n\n")
-                            wf.write("[INFO] More spectators can still join before the game starts.\n\n")
-                            wf.flush()
+                            safe_send(wf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
+                            safe_send(wf, f"[INFO] Currently {len(spectator_connections)} spectators connected.\n\n")
+                            safe_send(wf, "[INFO] More spectators can still join before the game starts.\n\n")
                         
-                        # Start a countdown timer in a new thread
+                        # Start countdown thread
                         start_timer_thread = threading.Thread(target=start_game_countdown)
                         start_timer_thread.daemon = True
                         start_timer_thread.start()
                     else:
-                        # Timer already running, just inform the new connection
-                        wfile.write(f"[INFO] Game is already counting down and will start soon.\n\n")
-                        wfile.write(f"[INFO] Currently {len(spectator_connections)} spectators connected.\n\n")
-                        wfile.flush()
+                        safe_send(wfile, f"[INFO] Game is already counting down and will start soon.\n\n")
+                        safe_send(wfile, f"[INFO] Currently {len(spectator_connections)} spectators connected.\n\n")
     
     except Exception as e:
-        print(f"[ERROR] Connection error: {e}\n\n")
-        # If anything goes wrong, clean up connection
-        with connection_lock:
-            # Determine which list to remove from
-            removed = False
-            for connections_list in [active_player_connections, spectator_connections]:
-                for i, (c, _, _, _, _) in enumerate(connections_list):
-                    if c == conn:
-                        del connections_list[i]
-                        removed = True
-                        break
-                if removed:
-                    break
-        
-        try:
-            conn.close()
-        except:
-            pass
+        print(f"[ERROR] Connection setup error: {e}\n\n")
+        cleanup_connection(conn)
         return
-        
-    # Keep connection open and check for commands while waiting for game to start
+
     try:
+        # Main loop while waiting for game to start
         waiting_for_game = True
         while waiting_for_game and not game_in_progress:
-            # Make the socket non-blocking for reading with timeout
             ready, _, _ = select.select([conn], [], [], 0.5)
             if ready:
                 cmd = rfile.readline().strip().upper()
                 if cmd == 'QUIT':
-                    print(f"[INFO] Connection from {addr} has quit while waiting.\n\n")
-                    # Clean up connection
-                    with connection_lock:
-                        # Determine which list to remove from and the type of connection
-                        removed_from_active = False
-                        for i, (c, _, _, _, num) in enumerate(active_player_connections):
-                            if c == conn:
-                                print(f"[INFO] Active Player {num} has quit while waiting.\n\n")
-                                del active_player_connections[i]
-                                removed_from_active = True
-                                break
-                        
-                        if not removed_from_active:
-                            for i, (c, _, _, _, num) in enumerate(spectator_connections):
-                                if c == conn:
-                                    print(f"[INFO] Spectator {num} has quit while waiting.\n\n")
-                                    del spectator_connections[i]
-                                    break
-                        
-                        # If we lose an active player, cancel the countdown
-                        if removed_from_active:
-                            game_ready_event.clear()
-                            
-                            # Notify all remaining connections
-                            for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                                wf.write("[INFO] A player left. Game start cancelled.\n\n")
-                                wf.write("[INFO] Disconnecting all connections. Please reconnect.\n\n")
-                                wf.flush()
-                            
-                            # Make copies of the connection lists before modifying them
-                            connections_to_close = active_player_connections.copy() + spectator_connections.copy()
-                            
-                            # Clear the connection lists to reset player numbers
-                            active_player_connections.clear()
-                            spectator_connections.clear()
-                            
-                            # Close all remaining connections
-                            for c, _, _, _, _ in connections_to_close:
-                                try:
-                                    c.close()
-                                except:
-                                    pass
-                    
-                    conn.close()
+                    print(f"[INFO] {addr} has quit.\n\n")
+                    handle_quit(conn)
                     return
             
-            # Check if the game is starting (indicated by the event)
             if game_ready_event.is_set():
                 waiting_for_game = False
-            
+
     except Exception as e:
-        print(f"[INFO] Connection from {addr} disconnected while waiting: {e}\n\n")
-        with connection_lock:
-            # Determine which list to remove from and the type of connection
-            removed_from_active = False
-            for i, (c, _, _, _, num) in enumerate(active_player_connections):
-                if c == conn:
-                    print(f"[INFO] Active Player {num} disconnected while waiting.\n\n")
-                    del active_player_connections[i]
-                    removed_from_active = True
-                    break
-            
-            if not removed_from_active:
-                for i, (c, _, _, _, num) in enumerate(spectator_connections):
-                    if c == conn:
-                        print(f"[INFO] Spectator {num} disconnected while waiting.\n\n")
-                        del spectator_connections[i]
-                        break
-            
-            # If we lose an active player, cancel the countdown
-            if removed_from_active:
-                game_ready_event.clear()
-                
-                # Notify all remaining connections
-                for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                    wf.write("[INFO] A player left. Game start cancelled.\n\n")
-                    wf.write("[INFO] Disconnecting all connections. Please reconnect.\n\n")
-                    wf.flush()
-                
-                # Make copies of the connection lists before modifying them
-                connections_to_close = active_player_connections.copy() + spectator_connections.copy()
-                
-                # Clear the connection lists to reset player numbers
-                active_player_connections.clear()
-                spectator_connections.clear()
-                
-                # Close all remaining connections
-                for c, _, _, _, _ in connections_to_close:
-                    try:
-                        c.close()
-                    except:
-                        pass
-        
-        try:
-            conn.close()
-        except:
-            pass
+        print(f"[INFO] {addr} disconnected while waiting: {e}\n\n")
+        handle_quit(conn)
         return
 
+    except Exception as e:
+        print(f"[INFO] {addr} disconnected while waiting: {e}\n\n")
+        cleanup_connection(conn)
+
 def start_game_countdown():
-    # Count down for GAME_START_DELAY seconds, then start the game
-    # if we still have both active players.
     global game_in_progress, active_player_connections, spectator_connections, countdown_timer_running
     
     try:
@@ -350,12 +300,8 @@ def start_game_countdown():
                         
                         # Notify all connections before closing
                         for _, _, _, wf, _ in connections_to_close:
-                            try:
-                                wf.write("[INFO] Not enough active players left. Game start cancelled.\n\n")
-                                wf.write("[INFO] Disconnecting all connections. Please reconnect.\n\n")
-                                wf.flush()
-                            except:
-                                pass
+                            safe_send(wf, "[INFO] Not enough active players left. Game start cancelled.\n\n")
+                            safe_send(wf, "[INFO] Disconnecting all connections. Please reconnect.\n\n")
                         
                         # Clear the connection lists to reset player numbers
                         active_player_connections.clear()
@@ -372,8 +318,7 @@ def start_game_countdown():
                     
                     # Update all connections on countdown
                     for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                        wf.write(f"[INFO] Game starting in {i} seconds... ({len(spectator_connections)} spectators)\n\n")
-                        wf.flush()
+                        safe_send(wf, f"[INFO] Game starting in {i} seconds... ({len(spectator_connections)} spectators)\n\n")
             
             time.sleep(1)
     
@@ -408,76 +353,57 @@ def start_game_countdown():
             countdown_timer_running = False
         print(f"[ERROR] Countdown error: {e}")
 
-def run_game_session(active_player_connections, spectator_connections):
-    # Run a game session with active players and spectators.
-    # Args:
-    #     active_player_connections: List of (conn, addr, rfile, wfile, player_num) tuples for active players
-    #     spectator_connections: List of (conn, addr, rfile, wfile, spectator_num) tuples for spectators
+def run_game_session(active_connections, spectator_conns):
     global game_in_progress
-    
+
     try:
         # Extract the rfiles and wfiles for active players (for game interaction)
         player_rfiles = []
         player_wfiles = []
         
-        for _, _, rfile, wfile, _ in active_player_connections:
+        for _, _, rfile, wfile, _ in active_connections:
             player_rfiles.append(rfile)
             player_wfiles.append(wfile)
         
         # Extract wfiles for spectators (for read-only updates)
         spectator_wfiles = []
-        for _, _, _, wfile, _ in spectator_connections:
+        for _, _, _, wfile, _ in spectator_conns:
             spectator_wfiles.append(wfile)
         
         # Notify all connections that the game is starting
-        spectator_count = len(spectator_connections)
-        
+        spectator_count = len(spectator_conns)
+
         # Notify active players
         for wfile in player_wfiles:
-            try:
-                wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
-                wfile.write("[INFO] You are an active player - you can make moves.\n\n")
-                wfile.flush()
-            except:
-                pass
+            safe_send(wfile, f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
+            safe_send(wfile, "[INFO] You are an active player - you can make moves.\n\n")
         
         # Notify spectators
         for wfile in spectator_wfiles:
-            try:
-                wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
-                wfile.write("[INFO] You are a spectator - you can only watch the game.\n\n")
-                wfile.flush()
-            except:
-                pass
+            safe_send(wfile, f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
+            safe_send(wfile, "[INFO] You are a spectator - you can only watch the game.\n\n")
         
         # Run the multiplayer game (passing both player files and spectator wfiles)
         run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles)
         
         # Game has ended - notify all connections
         for wfile in player_wfiles + spectator_wfiles:
-            try:
-                wfile.write("[INFO] Game over! Thank you for playing/watching!\n\n")
-                wfile.flush()
-            except:
-                pass
-        
+            safe_send(wfile, "[INFO] Game over! Thank you for playing/watching!\n\n")
+
     except Exception as e:
         print(f"[ERROR] Game error: {e}")
         # Notify all connections of the error
-        for _, _, _, wfile, _ in active_player_connections + spectator_connections:
-            try:
-                wfile.write("[ERROR] An error occurred in the game. The session will end.\n\n")
-                wfile.flush()
-            except:
-                pass
+        for _, _, _, wfile, _ in active_connections + spectator_conns:
+            safe_send(wfile, "[ERROR] An error occurred in the game. The session will end.\n\n")
     
     finally:
-        # Close all connections
-        for conn, _, _, _, _ in active_player_connections + spectator_connections:
-            try:
-                conn.close()
-            except:
-                pass
+        # Close all connections and checksum files
+        for conn, _, rfile, wfile, _ in active_connections + spectator_conns:
+            for f in (rfile, wfile, conn):
+                try:
+                    f.close()
+                except:
+                    pass
         
         # Reset game state
         with game_in_progress_lock:

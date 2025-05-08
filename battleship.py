@@ -7,7 +7,7 @@ import random
 import threading
 import select
 import time
-from utils import add_checksum, verify_checksum, strip_checksum
+import utils
 
 BOARD_SIZE = 10
 SHIPS = [
@@ -17,7 +17,6 @@ SHIPS = [
     ("Submarine", 3),
     ("Destroyer", 2)
 ]
-
 
 class Board:
     def __init__(self, size=BOARD_SIZE):
@@ -185,14 +184,7 @@ def parse_coordinate(coord_str):
     return (row, col)
 
 def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=None):
-    """
-    Run a Battleship game with 2 players and optional spectators.
-    
-    Args:
-        player_rfiles: List of read file objects for players/spectators
-        player_wfiles: List of write file objects for players/spectators
-    """
-    total_connections = len(player_rfiles)
+    total_connections = len(player_rfiles) + len(spectator_wfiles)
     if total_connections < 2:
         raise ValueError("At least 2 connections required")
     
@@ -203,52 +195,42 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     
     
     def send_to_connection(conn_idx, msg):
-        # Send a message to a specific connection (player or spectator)
         try:
             wfile = player_wfiles[conn_idx]
-            # Check if the file is still valid/open
             if wfile.closed:
                 raise BrokenPipeError("File already closed")
-            
-            # Determine if we're dealing with a text or binary file mode
             is_binary_mode = hasattr(wfile, 'mode') and 'b' in wfile.mode
-            
-            # Convert message to bytes if it's a string (for binary mode)
-            # or ensure it's a string for text mode
             if is_binary_mode:
-                # File is in binary mode
                 if isinstance(msg, str):
                     msg_bytes = msg.encode('utf-8')
                 else:
                     msg_bytes = msg
-                    
-                # Add checksum to the message
-                packet_with_checksum = add_checksum(msg_bytes)
-                    
-                # Write the packet with checksum
+                packet_with_checksum = utils.add_checksum(msg_bytes)
                 wfile.write(packet_with_checksum + b'\n')
             else:
-                # File is in text mode, expecting strings
                 if isinstance(msg, bytes):
                     msg_str = msg.decode('utf-8')
                 else:
                     msg_str = msg
-                    
-                # Write the message as a string
                 wfile.write(msg_str + '\n')
             
-            wfile.flush()
+            # Only change: Add try/except around flush to handle binary data errors
+            try:
+                wfile.flush()
+            except TypeError:
+                # If flush fails because of binary/text mismatch, just continue
+                # The data was already written successfully
+                pass
+                
             return True
         except (BrokenPipeError, ConnectionError, ConnectionResetError, IOError) as e:
             print(f"[ERROR] Failed to send message to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
-            
-            # Handle disconnection based on if it's a player or spectator
             if conn_idx in player_indices:
                 player_indices.remove(conn_idx)
                 send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
             elif conn_idx in spectator_indices:
                 spectator_indices.remove(conn_idx)
-                
+                    
             return False
 
     def send_to_all_others(msg, exclude_idx=None):
@@ -274,93 +256,73 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             send_to_connection(idx, msg)
 
     def send_board_to_connection(conn_idx, board_idx, board, show_hidden=False):
-        # Send a board state to a connection
         try:
+            print(f"[DEBUG] Sending board to connection {conn_idx} (Board Index: {board_idx})")
             wfile = player_wfiles[conn_idx]
-            
-            # Determine if this is the player's own board or opponent's board
+            print(f"[DEBUG] wfile.closed: {wfile.closed}")
             is_own_board = conn_idx == board_idx
-            
             if conn_idx in player_indices:
-                # This is a player
                 board_owner = "Your" if is_own_board else "Opponent's"
             else:
-                # This is a spectator
                 board_owner = f"Player {board_idx + 1}'s"
-            
-            # Build the board representation as a string
+            print(f"[DEBUG] Board Owner Label: {board_owner}")
             board_msg = f"{board_owner} Grid:\n"
-            
-            # Which grid to display depends on whether we're showing hidden ships
             grid_to_show = board.hidden_grid if show_hidden else board.display_grid
-            
-            # Column headers
+            print(f"[DEBUG] grid_to_show: {'hidden' if show_hidden else 'display'} grid")
+            print(f"[DEBUG] Grid size: {board.size}")
+            print(f"[DEBUG] Grid to show:")
+            for r in range(board.size):
+                print(f"[DEBUG] Row {r}: {grid_to_show[r]}")
             board_msg += "+  " + " ".join(str(i + 1) for i in range(board.size)) + '\n'
-            
-            # Each row with label
             for r in range(board.size):
                 row_label = chr(ord('A') + r)
                 row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
                 board_msg += f"{row_label:2} {row_str}\n"
-            
             board_msg += '\n'
-            
-            # Convert to bytes, add checksum, and send
+            print(f"[DEBUG] Full board message: {board_msg}")
             board_bytes = board_msg.encode('utf-8')
-            packet_with_checksum = add_checksum(board_bytes)
-            
-            # Here's the fix: make sure we're writing bytes, not mixing bytes and strings
-            wfile.write(packet_with_checksum + b'\n')
-            wfile.flush()
+            print(f"[DEBUG] Encoded message bytes: {board_bytes}")
+            packet_with_checksum = utils.add_checksum(board_bytes)
+            print(f"[DEBUG] Packet with checksum: {packet_with_checksum}")
+            wfile.write(packet_with_checksum)
+            try:
+                if hasattr(wfile, 'flush') and callable(wfile.flush):
+                    wfile.flush()
+            except TypeError as e:
+                print(f"[WARNING] TypeError during flush: {e}. This is likely due to a type mismatch between what flush() expects and what's in the buffer.")
+            print(f"[DEBUG] Board successfully sent to {board_owner} (Connection {conn_idx})")
             return True
         except (BrokenPipeError, ConnectionError) as e:
             print(f"[ERROR] Failed to send board to {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}: {e}\n\n")
-            
-            # Handle disconnection
             if conn_idx in player_indices:
                 player_indices.remove(conn_idx)
                 send_to_all_others(f"[INFO] Player {conn_idx + 1} disconnected from the game.\n\n", exclude_idx=conn_idx)
             elif conn_idx in spectator_indices:
                 spectator_indices.remove(conn_idx)
-            
             return False
 
     def handle_input_during_turn(player_idx, turn_timeout=15):
-        # Keep track of which connections have already been warned
         warned_connections = set()
-
-        # Timer variables
         start_time = time.time()
         time_remaining = turn_timeout
-        
-        # Track when reminders have been sent
         reminders_sent = set()  # Keep track of which reminders have been sent
-
-        # Send initial timer message
         send_to_connection(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
 
         while True:
-            # Update timer
             elapsed_time = time.time() - start_time
             time_remaining = max(0, turn_timeout - int(elapsed_time))
-            
-            # Check if time has expired
             if time_remaining == 0:
                 send_to_connection(player_idx, "[INFO] Time expired! You did not enter a coordinate, giving up your turn.")
                 send_to_all_others(f"[INFO] Player {player_idx + 1} timed out and gave up their turn.", exclude_idx=player_idx)
                 return "timeout"  # Return a special value to indicate timeout
-            
-            # Define reminder thresholds
+
             reminder_thresholds = [10, 5]  # Default reminders for 15s timer
-            
-            # Send reminders at appropriate times
             for threshold in reminder_thresholds:
                 if time_remaining <= threshold and threshold not in reminders_sent:
                     send_to_connection(player_idx, f"[INFO] Enter a coordinate ({time_remaining}s remaining)")
                     reminders_sent.add(threshold)
                     break  # Only send one reminder at a time
 
-            # Check current player for input first, without blocking
             try:
                 input_data = recv_from_connection(player_idx, timeout=0.1)
                 if input_data is not None:
@@ -372,106 +334,70 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                     send_to_all_others(f"[INFO] Player {player_idx + 1} disconnected from the game.\n\n", exclude_idx=player_idx)
                 return "quit"
 
-            # Check other connections (players and spectators)
             all_connections = player_indices + spectator_indices
             for conn_i in all_connections:
-                # Skip current player, we already checked them
                 if conn_i == player_idx:
                     continue
-                    
                 try:
-                    # Try to get input from this connection (non-blocking)
                     input_data = recv_from_connection(conn_i, timeout=0)
                     if input_data is not None:
-                        # Not this connection's turn
                         if conn_i in player_indices:
-                            # This is the other player - warn them once
                             if conn_i not in warned_connections:
                                 send_to_connection(conn_i, f"[WARNING] It's not your turn. Please wait for Player {player_idx + 1} to complete their turn.\n")
                                 warned_connections.add(conn_i)
                         else:
-                            # This is a spectator - remind them they're watching
                             if conn_i not in warned_connections:
                                 send_to_connection(conn_i, f"[INFO] You are a spectator. Player {player_idx + 1} is currently taking their turn.\n")
                                 warned_connections.add(conn_i)
                 except ConnectionResetError:
-                    # Handle disconnection
                     if conn_i in player_indices:
                         player_indices.remove(conn_i)
                         send_to_all_others(f"[INFO] Player {conn_i + 1} disconnected from the game.\n\n", exclude_idx=conn_i)
                     elif conn_i in spectator_indices:
                         spectator_indices.remove(conn_i)
-            
-            # Small sleep to prevent CPU hogging
+
             time.sleep(0.1)
+
 
     player_buffers = ["", ""]
 
     def recv_from_connection(conn_idx, timeout=None):
         try:
-            rfile = player_rfiles[conn_idx]
-            
-            # Check if the file has data ready without using select
+            rfile = player_rfiles[conn_idx]  # Get the rfile for the connection
             if timeout is not None:
-                # For file-like objects that don't support select/fileno,
-                # we need an alternative approach to handle timeouts
-                
-                # Simple non-blocking check if the timeout is 0
                 if timeout == 0:
-                    # Use peek to check if there's data available
                     if hasattr(rfile, 'peek'):
                         data = rfile.peek(1)
                         if not data:  # No data available
                             return None
                     else:
-                        # Can't do a proper non-blocking check, assume no data
                         return None
-                
-                # For other timeouts, we'll use a simple polling approach
                 elif timeout > 0:
-                    # Set the end time for our polling loop
                     end_time = time.time() + timeout
                     while time.time() < end_time:
-                        # Check if there's data (if peek is available)
                         if hasattr(rfile, 'peek'):
                             data = rfile.peek(1)
                             if data:  # Data is available
                                 break
-                        # Sleep briefly to avoid tight loop
                         time.sleep(min(0.05, (end_time - time.time()) / 2))
-                        
-                        # Check if we've reached the timeout
                         if time.time() >= end_time:
                             return None  # Timeout reached, no data
-            
-            # If we get here, either there's data available or timeout is None
-            # Try to read the data now
             raw_data = rfile.readline()
             if not raw_data:  # Empty string indicates disconnection
                 raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected\n\n")
-            
-            # Handle both string and bytes cases consistently
             if isinstance(raw_data, str):
-                # If it's already a string, just strip the newline
                 packet = raw_data.rstrip('\n').encode('utf-8')
             else:
-                # If it's bytes, strip the newline byte
                 packet = raw_data.rstrip(b'\n')
-            
-            # Verify and strip checksum
-            if not verify_checksum(packet):
+            if not utils.verify_checksum(packet):
                 print(f"[WARNING] Received corrupt data from {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1}")
                 return None  # Or handle corrupt data differently
-            
-            # Strip checksum and decode the message to ensure we ALWAYS return a string
-            data = strip_checksum(packet)
+            data = utils.strip_checksum(packet)
             if isinstance(data, bytes):
                 return data.decode('utf-8').strip()
             else:
-                # If strip_checksum already returned a string (unlikely but being safe)
                 return data.strip()
         except (ConnectionError, IOError, ValueError) as e:
-            # Catch broader range of connection issues
             raise ConnectionResetError(f"[INFO] {'Player' if conn_idx < 2 else 'Spectator'} {conn_idx + 1} disconnected: {str(e)}\n\n")
 
     # Create boards for the two players
@@ -488,161 +414,99 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     player_ready_events = [threading.Event(), threading.Event()]  # Only need events for the two players
     setup_success = [False, False]  # Track whether each player completed setup
     
-    # Define a function to handle ship placement for any player with a timer
     def setup_player_ships(player_idx):
         nonlocal setup_success
-        
         try:
             player_board = boards[player_idx]
-            
-            # Set up timer-related variables
             start_time = time.time()
             time_limit = 60  # 1 minute in seconds
             reminder_times = {45, 30, 15, 10, 5}  # Reminders to send
             sent_reminders = set()  # Track which reminders have been sent
-            
-            # Send initial instructions
-            send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
+            send_to_connection(player_idx, "[INFO] You have 1 minute to place your ships!")
             placement = None
-            
-            # For manual placement, we need to track which ship we're placing
             current_ship_index = 0
             ships_to_place = list(SHIPS)  # Make a copy of the ships list
             manual_placement_started = False
             waiting_for_placement_input = False
             first_placement = True
-            
             while True:
-                # Check if we're out of time
                 elapsed_time = time.time() - start_time
                 remaining_time = time_limit - elapsed_time
-                
-                # Send time reminders
                 for reminder_time in reminder_times:
                     if remaining_time <= reminder_time and reminder_time not in sent_reminders:
                         send_to_connection(player_idx, f"[TIME] {reminder_time} seconds remaining to place your ships!")
                         sent_reminders.add(reminder_time)
-                
-                # If time is up, place ships randomly
                 if remaining_time <= 0:
                     send_to_connection(player_idx, "[TIME] Time's up! Placing ships randomly.")
                     player_board.place_ships_randomly(SHIPS)
                     send_to_connection(player_idx, "[INFO] Ships placed randomly due to time limit.")
                     send_board_to_connection(player_idx, player_idx, player_board, True)
                     break
-                
-                # If we're not waiting for a specific ship placement input,
-                # wait for initial placement choice (RANDOM/MANUAL)
                 if not manual_placement_started and not waiting_for_placement_input:
                     waiting_for_placement_input = True
                     placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))
                     waiting_for_placement_input = False
-                    
-                    # If we got no input, continue the loop to check time again
                     if placement is None:
                         continue
-                    
                     if placement.lower() == 'quit':
                         send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
                         send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
-                        
-                        # Mark this player as not successful
                         setup_success[player_idx] = False
-                        
-                        # Set this player's ready event
                         player_ready_events[player_idx].set()
                         return False
-                    
                     elif placement.upper() == 'RANDOM':
                         player_board.place_ships_randomly(SHIPS)
                         send_to_connection(player_idx, "[INFO] Ships placed randomly.")
                         send_board_to_connection(player_idx, player_idx, player_board, True)
                         break
-                    
                     elif placement.upper() == 'MANUAL':
-                        # Start manual placement process
                         manual_placement_started = True
                         send_to_connection(player_idx, "[INFO] Placing ships manually:")
                         current_ship_index = 0
-                    
                     else:
-                        # Invalid placement option - ask player to try again
                         send_to_connection(player_idx, "[TIP] Invalid option. Please type 'RANDOM' for random placement or 'MANUAL' for manual placement.")
                         continue
-                
-                # Handle manual placement of ships
                 if manual_placement_started:
                     if current_ship_index >= len(ships_to_place):
-                        # All ships placed successfully
                         send_board_to_connection(player_idx, player_idx, player_board, True)
                         send_to_connection(player_idx, "[INFO] All ships placed successfully.")
                         break
-                    
                     ship_name, ship_size = ships_to_place[current_ship_index]
-                    
-                    # Show current board state
                     if first_placement:
                         send_board_to_connection(player_idx, player_idx, player_board, True)
                         send_to_connection(player_idx, f"Placing {ship_name} (size {ship_size}). Enter starting coordinate and orientation (e.g., 'A1 H' or 'B5 V'):")
                         first_placement = False
-                    
-                    # use select to check the opponent's socket for disconnections
                     opponent_idx = 1 - player_idx
                     try:
                         readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
                         if readable:
-                            # Read the raw data
-                            opponent_data = player_rfiles[opponent_idx].readline()
-                            if not opponent_data:
+                            opponent_line = player_rfiles[opponent_idx].readline()
+                            if not opponent_line:  # Opponent disconnected
                                 raise ConnectionResetError()
-                                
-                            # If data exists, we should verify its checksum
-                            # Convert to bytes if it's not already
-                            if isinstance(opponent_data, str):
-                                opponent_packet = opponent_data.rstrip('\n').encode('utf-8')
-                            else:
-                                opponent_packet = opponent_data.rstrip(b'\n')
-                                
-                            # Just check if the data is valid - we don't need to process it
-                            if not verify_checksum(opponent_packet):
-                                print(f"[WARNING] Received corrupt data from Player {opponent_idx + 1}")
-                                # You might want to handle corrupt data differently
                     except (ConnectionResetError, OSError):
-                        send_to_connection(player_idx, "[ALERT] Your opponent has disconnected. Setup aborted.\n\n")
+                        send_to_connection(player_idx, "[ALERT] Your opponent has lost connection. \n\n")
                         setup_success[player_idx] = False
                         player_ready_events[player_idx].set()
                         return False
-    
-                    # Wait for placement input with timeout
                     waiting_for_placement_input = True
                     placement = recv_from_connection(player_idx, timeout=min(remaining_time, 0.1))  # Poll every 5 seconds max
                     waiting_for_placement_input = False
-                    
-                    # If we got no input, continue the loop to check time again
                     if placement is None:
                         continue
-                    
                     if placement.lower() == 'quit':
                         send_to_connection(player_idx, "[INFO] You forfeited during setup.\n\n")
                         send_to_all_others(f"[INFO] Player {player_idx + 1} forfeited during setup.\n\n", exclude_idx=player_idx)
-                        
-                        # Mark this player as not successful
                         setup_success[player_idx] = False
-                        
-                        # Set this player's ready event
                         player_ready_events[player_idx].set()
                         return False
-                    
                     try:
                         parts = placement.strip().split()
                         if len(parts) != 2:
                             send_to_connection(player_idx, "[TIP] Invalid format. Use 'COORD ORIENTATION' (e.g., 'A1 H')")
                             continue
-                        
                         coord_str, orientation_str = parts
                         row, col = parse_coordinate(coord_str)
                         orientation = 0 if orientation_str.upper() == 'H' else 1
-                        
                         if player_board.can_place_ship(row, col, ship_size, orientation):
                             occupied_positions = player_board.do_place_ship(row, col, ship_size, orientation)
                             player_board.placed_ships.append({
@@ -656,25 +520,14 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                     except ValueError as e:
                         send_to_connection(player_idx, f"[TIP] Invalid input: {e}")
                         continue
-            
-            # Signal that this player is ready and wait for other player
             setup_success[player_idx] = True
             send_to_connection(player_idx, f"[INFO] Your ships are placed. Waiting for the other player to finish placing their ships...\n")
-            
-            # Update spectators
             send_to_spectators(f"[INFO] Player {player_idx + 1} has finished placing their ships.\n")
-            
             player_ready_events[player_idx].set()
             return True
-            
         except ConnectionResetError:
-            # Player disconnected
             send_to_all_others(f"[INFO] Player {player_idx + 1} disconnected during setup.\n\n", exclude_idx=player_idx)
-            
-            # Mark this player as not successful
             setup_success[player_idx] = False
-            
-            # Set this player's ready event
             player_ready_events[player_idx].set()
             return False
     
