@@ -303,14 +303,10 @@ def start_game_countdown():
             # Set the event to notify waiting threads
             game_ready_event.set()
             
-            # Collect players' and spectators' connection info
-            active_connections = active_player_connections.copy()
-            spectator_conns = spectator_connections.copy()
-        
         # Start the game in a new thread
         game_thread = threading.Thread(
             target=run_game_session,
-            args=(active_connections, spectator_conns)
+            args=(active_player_connections, spectator_connections)
         )
         game_thread.daemon = True
         game_thread.start()
