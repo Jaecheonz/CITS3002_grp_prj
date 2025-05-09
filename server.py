@@ -15,6 +15,7 @@ PORT = 5000
 ACTIVE_PLAYERS = 2  # Exactly 2 active players needed
 MAX_CONNECTIONS = 8  # Maximum total connections (players + spectators)
 GAME_START_DELAY = 8  # Seconds to wait after active players join before starting
+CONNECTION_TIMEOUT = 30  # Seconds to wait for a reconnecting player
 
 # Global variables to track connections
 active_player_connections = []  # List of active players (max 2)
@@ -25,6 +26,112 @@ game_in_progress_lock = threading.Lock()
 game_ready_event = threading.Event()
 countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
+reconnect_event = threading.Event()
+reconnect_event.set()  # Set the event to indicate that the game is not currently reconnecting
+
+player_rfiles = []  # List of rfiles for active players
+player_wfiles = []  # List of wfiles for active players
+spectator_rfiles = []  # List of rfiles for spectators
+spectator_wfiles = []  # List of wfiles for spectators
+
+
+def map_wrfiles_(active_player_connections, spectator_connections):
+    # Map the rfiles and wfiles for active players and spectators
+    global player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles
+    # reset the lists to avoid duplication
+    while True:
+        try:
+            reconnect_event.wait()  # Wait for the reconnect event to be set
+            with connection_lock:
+                player_rfiles.clear()
+                player_wfiles.clear()
+                spectator_rfiles.clear()
+                spectator_wfiles.clear()
+                
+                # make sure list is right size
+                for i in range(len(active_player_connections)):
+                    player_rfiles.append(None)
+                    player_wfiles.append(None)
+                # Extract the rfiles and wfiles for active players based on the player number
+                for _, _, rfile, wfile, player_num in active_player_connections:
+                    player_rfiles[player_num - 1] = rfile
+                    player_wfiles[player_num - 1] = wfile
+
+                # make sure list is right size
+                for i in range(len(spectator_connections)):
+                    spectator_rfiles.append(None)
+                    spectator_wfiles.append(None)
+                # Extract the rfiles and wfiles for spectators (for game watching)
+                for _, _, rfile, wfile, spectator_num in spectator_connections:
+                    spectator_rfiles[spectator_num - 1] = rfile
+                    spectator_wfiles[spectator_num - 1] = wfile
+            time.sleep(1)  # Sleep for a second before checking again
+        except Exception as e:
+            print(f"[ERROR] Error mapping rfiles/wfiles: {e}")
+            break
+
+def monitor_connections(): 
+    #monitors connections during the game phase
+    global active_player_connections, game_in_progress, reconnecting, spectator_connections
+    global reconnect_event
+    try:
+        while game_in_progress:
+            # Check active player connections
+            for i in range(len(active_player_connections) - 1, -1, -1):
+                conn, addr, _, _, player_num = active_player_connections[i]
+                try:
+                    # Test if the connection is still alive
+                    conn.send(b'\0')  # Send a null byte
+                except:
+                    reconnecting = True # Set reconnecting flag
+                    del_player_num = player_num # Store the player number for reconnecting
+                    print(f"[INFO] Player {del_player_num} ({addr}) has lost connection.")
+                    del active_player_connections[i]
+
+                    # Notify remaining connections
+                    for _, _, _, wf, _ in active_player_connections + spectator_connections:
+                        wf.write(f"[INFO] Player {del_player_num} has lost connection. Awaiting reconnect...\n\n")
+                        wf.flush()
+                    
+                    reconnect_event.clear() # clear the event to make the game wait for reconnection
+                    
+                    # Start a thread to wait for reconnection
+                    reconnect_thread = threading.Thread(target=reconnect_player, args=(del_player_num,))
+                    reconnect_thread.daemon = True
+                    
+                    reconnect_thread.start()
+                    reconnect_thread.join()
+
+            #check spectator connections
+            for i in range(len(spectator_connections) - 1, -1, -1):
+                conn, addr, _, _, spectator_num = spectator_connections[i]
+                try:
+                    # Test if the connection is still alive
+                    conn.send(b'\0')  # Send a null byte
+                except:
+                    print(f"[INFO] Spectator {spectator_num} ({addr}) has lost connection.")
+                    del spectator_connections[i]
+
+            print(f"[INFO] Monitoring connections... {len(active_player_connections)} active players, {len(spectator_connections)} spectators.\n")
+            time.sleep(1)  # Check connections every second
+    except Exception as e:
+        print(f"[ERROR] Connection monitoring error: {e}")
+
+def reconnect_player(disconnected_player_num):
+    global reconnecting, reconnect_event
+    global active_player_connections
+    global spectator_connections
+
+    print(f"[INFO] Waiting for Player {disconnected_player_num} to reconnect...\n")
+
+    if reconnecting:
+        # Wait for CONNECTION_TIMEOUT seconds for a new connection
+        start_time = time.time()
+        while time.time() - start_time < CONNECTION_TIMEOUT:
+            if len(active_player_connections) < ACTIVE_PLAYERS and reconnecting:
+                time.sleep(1)  # Check every second
+                print("[INFO] Waiting for reconnection...\n")
+
 
 def handle_client(conn, addr):
     # Handle a client connection by adding it to the appropriate connection list.
@@ -322,20 +429,18 @@ def run_game_session(active_player_connections, spectator_connections):
     # Args:
     #     active_player_connections: List of (conn, addr, rfile, wfile, player_num) tuples for active players
     #     spectator_connections: List of (conn, addr, rfile, wfile, spectator_num) tuples for spectators
-    global game_in_progress
+    global game_in_progress, player_rfiles, player_wfiles, spectator_rfiles, spectator_wfiles
     
     try:
         # Extract the rfiles and wfiles for active players (for game interaction)
-        player_rfiles = []
-        player_wfiles = []
         
         for _, _, rfile, wfile, _ in active_player_connections:
             player_rfiles.append(rfile)
             player_wfiles.append(wfile)
         
-        # Extract wfiles for spectators (for read-only updates)
-        spectator_wfiles = []
-        for _, _, _, wfile, _ in spectator_connections:
+        # Extract the rfiles and wfiles for spectators (for game watching and chat)
+        for _, _, rfile, wfile, _ in spectator_connections:
+            spectator_rfiles.append(rfile)
             spectator_wfiles.append(wfile)
         
         # Notify all connections that the game is starting
@@ -347,7 +452,8 @@ def run_game_session(active_player_connections, spectator_connections):
                 wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
                 wfile.write("[INFO] You are an active player - you can make moves.\n\n")
                 wfile.flush()
-            except:
+            except Exception as e:
+                print(f"[ERROR] Failed to notify active player about game start: {e}")
                 pass
         
         # Notify spectators
@@ -356,7 +462,8 @@ def run_game_session(active_player_connections, spectator_connections):
                 wfile.write(f"[INFO] Game is starting with {spectator_count} spectators!\n\n")
                 wfile.write("[INFO] You are a spectator - you can only watch the game.\n\n")
                 wfile.flush()
-            except:
+            except Exception as e:
+                print(f"[ERROR] Failed to notify spectator about game start: {e}")
                 pass
         
         # Run the multiplayer game (passing both player files and spectator wfiles)
