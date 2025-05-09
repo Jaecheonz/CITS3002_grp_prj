@@ -94,7 +94,7 @@ def monitor_connections():
                         wf.flush()
                     
                     reconnect_event.clear() # clear the event to make the game wait for reconnection
-                    
+                    reconnecting = True # Set the reconnecting flag
                     # Start a thread to wait for reconnection
                     reconnect_thread = threading.Thread(target=reconnect_player, args=(del_player_num,))
                     reconnect_thread.daemon = True
@@ -120,7 +120,6 @@ def monitor_connections():
 def reconnect_player(disconnected_player_num):
     global reconnecting, reconnect_event
     global active_player_connections
-    global spectator_connections
 
     print(f"[INFO] Waiting for Player {disconnected_player_num} to reconnect...\n")
 
@@ -128,9 +127,23 @@ def reconnect_player(disconnected_player_num):
         # Wait for CONNECTION_TIMEOUT seconds for a new connection
         start_time = time.time()
         while time.time() - start_time < CONNECTION_TIMEOUT:
-            if len(active_player_connections) < ACTIVE_PLAYERS and reconnecting:
+            if len(active_player_connections) < ACTIVE_PLAYERS:
                 time.sleep(1)  # Check every second
                 print("[INFO] Waiting for reconnection...\n")
+            elif len(active_player_connections) == ACTIVE_PLAYERS:
+                reconnect_event.set()  # Set the event to indicate that the game is not currently reconnecting
+                print(f"[INFO] Player {disconnected_player_num} has reconnected\n")
+                reconnecting = False  # Reset the reconnecting flag
+                return  # Exit the function if the player has reconnected
+            
+        # Timeout reached, player did not reconnect
+        print(f"[INFO] Player {disconnected_player_num} failed to reconnect. Ending game.\n")
+        reconnect_event.set()
+        reconnecting = False  # Reset the reconnecting flag
+        return
+    else:
+        print("[INFO] Reconnection called but not needed.\n")
+        reconnect_event.set()  # Set the event to indicate that the game is not currently reconnecting
 
 
 def handle_client(conn, addr):
@@ -357,44 +370,42 @@ def start_game_countdown():
         # Wait for the countdown time
         for i in range(GAME_START_DELAY, 0, -1):
             # Every few seconds, update connections on time remaining
-            if i % 5 == 0 or i <= 3:
-                with connection_lock:
-                    # Make sure we still have both active players
-                    if len(active_player_connections) < ACTIVE_PLAYERS:
-                        # Reset timer flag before returning
-                        with countdown_timer_lock:
-                            countdown_timer_running = False
-                            
-                        # Make copies of the connection lists before modifying them
-                        connections_to_close = active_player_connections.copy() + spectator_connections.copy()
+            with connection_lock:
+                # Make sure we still have both active players
+                if len(active_player_connections) < ACTIVE_PLAYERS:
+                    # Reset timer flag before returning
+                    with countdown_timer_lock:
+                        countdown_timer_running = False
                         
-                        # Notify all connections before closing
-                        for _, _, _, wf, _ in connections_to_close:
-                            try:
-                                wf.write("[INFO] Not enough active players left. Game start cancelled.\n\n")
-                                wf.write("[INFO] Disconnecting all connections. Please reconnect.\n\n")
-                                wf.flush()
-                            except:
-                                pass
-                        
-                        # Clear the connection lists to reset player numbers
-                        active_player_connections.clear()
-                        spectator_connections.clear()
-                        
-                        # Close all remaining connections
-                        for c, _, _, _, _ in connections_to_close:
-                            try:
-                                c.close()
-                            except:
-                                pass
-                        
-                        return
+                    # Make copies of the connection lists before modifying them
+                    connections_to_close = active_player_connections + spectator_connections
                     
-                    # Update all connections on countdown
-                    for _, _, _, wf, _ in active_player_connections + spectator_connections:
-                        wf.write(f"[INFO] Game starting in {i} seconds... ({len(spectator_connections)} spectators)\n\n")
-                        wf.flush()
-            
+                    # Notify all connections before closing
+                    for _, _, _, wf, _ in connections_to_close:
+                        try:
+                            wf.write("[INFO] Not enough active players left. Game start cancelled.\n\n")
+                            wf.write("[INFO] Disconnecting all connections. Please reconnect.\n\n")
+                            wf.flush()
+                        except:
+                            pass
+                    
+                    # Clear the connection lists to reset player numbers
+                    active_player_connections.clear()
+                    spectator_connections.clear()
+                    
+                    # Close all remaining connections
+                    for c, _, _, _, _ in connections_to_close:
+                        try:
+                            c.close()
+                        except:
+                            pass
+                    
+                    return
+                
+                # Update all connections on countdown
+                for _, _, _, wf, _ in active_player_connections + spectator_connections:
+                    wf.write(f"[INFO] Game starting in {i} seconds... ({len(spectator_connections)} spectators)\n\n")
+                    wf.flush()
             time.sleep(1)
     
         # Time's up, start the game if we still have both active players

@@ -64,7 +64,7 @@ def receive_messages(rfile):
                 
             # Detect forfeit/disconnect messages
             if any(phrase in line for phrase in [
-                "forfeited",
+                # "forfeited",                        <<< This caused issues
                 "disconnected",
                 "Not enough players"
             ]):
