@@ -1,148 +1,119 @@
-# client.py
-# Connects to a Battleship server which runs the N-player Battleship game.
-# Uses threading to separate receiving server messages and sending user input.
+"""
+client.py
+"""
 
 import socket
 import threading
-import os
+import sys
 import time
-import utils
-import base64
+import select
 
 HOST = '127.0.0.1'
 PORT = 5000
+# Constants
+INACTIVITY_TIMEOUT = 60  # 60 seconds timeout for inactivity
+MAX_RETRIES = 3  # Maximum number of retries for connection
+RETRY_DELAY = 2
 
-# Flag to control the message receiving thread
+# Global flag for controlling the client loop
 running = True
-# Variable to track the game phase
-game_phase = "setup"
 
-def receive_messages(sock):
-    global running, game_phase
-    grid_mode = False
+def receive_messages(rfile):
+    """Continuously receive and print messages from the server."""
+    global running
     try:
-        grid_mode = False
-
         while running:
-            full_packet = sock.recv(4096)
-            if not full_packet:
-                print("[INFO] Server disconnected.\n\n")
-                running = False
+            # Read directly from the file object instead of using select
+            line = rfile.readline()
+            if not line:  # Server closed connection
+                print("\n[INFO] Server closed the connection")
                 break
-            
-            try:
-                base64_str = full_packet.decode('utf-8').strip()  # From bytes to str
-                decoded_packet = base64.b64decode(base64_str)     # Base64 decode back to bytes
-            except Exception as e:
-                print(f"[WARNING] Failed to decode base64 packet: {e}")
-                continue  # Skip this broken packet
-
-            if not utils.verify_checksum(decoded_packet):
-                print("[WARNING] Corrupted packet received. Discarding...")
-                continue  # Skip this corrupted packet
-
-            data = utils.strip_checksum(decoded_packet)
-            lines = data.decode().splitlines()
-
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-
-                if grid_mode:
-                    # We are currently receiving a grid
-                    if line == "":
-                        # Empty line means grid transmission done
-                        grid_mode = False
-                        continue
-
-                    # If grid_mode is true, it means we need to decode the base64 grid data.
-                    try:
-                        grid_line = base64.b64decode(line).decode('utf-8')  # Decode each grid line (base64 -> utf-8)
-                        print(grid_line)
-                    except Exception as e:
-                        print(f"[ERROR] Failed to decode grid line: {e}")
-                    continue
-
-                # Normal message handling
-                if "GAME PHASE" in line:
-                    game_phase = "gameplay"
-                    print("[INFO] Entered gameplay phase.\n")
-
-                if line.endswith("Grid:"):
-                    print(f"\n[{line}]")
-                    grid_mode = True
-                    continue
-
+                
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if this is a grid message
+            if line == "GRID":
+                # Print the grid
+                while True:
+                    grid_line = rfile.readline().strip()
+                    if not grid_line:
+                        break
+                    print(grid_line)
+                print()  # Add extra newline after grid
+            else:
                 print(line)
-
-                if any(phrase in line for phrase in [
-                    "Game has ended",
-                    "Game canceled",
-                    "Game start canceled",
-                    "You win!",
-                    "You are eliminated",
-                    "wins the game",
-                    "You are the last player standing"
-                ]):
-                    print("\n[INFO] Game has ended. Exiting...\n")
-                    running = False
-                    time.sleep(3)
-                    os._exit(0)
-
-                if any(phrase in line for phrase in [
-                    "forfeited",
-                    "disconnected",
-                    "Not enough players"
-                ]):
-                    print("\n[INFO] A player has left the game.")
-
+                
+    except ConnectionResetError:
+        print("\n[ERROR] Connection to server was reset")
+    except ConnectionAbortedError:
+        print("\n[ERROR] Connection to server was aborted")
     except Exception as e:
-        print(f"[ERROR] Exception in receive thread: {e}")
+        print(f"\n[ERROR] An error occurred: {str(e)}")
+    finally:
+        # Ensure we exit the program when the connection is lost
         running = False
-        time.sleep(3)
-        os._exit(1)
+        sys.exit(1)
+
+def get_user_input(prompt, timeout=INACTIVITY_TIMEOUT):
+    """Get user input with timeout."""
+    print(prompt, end='', flush=True)
+    
+    try:
+        return input()
+    except EOFError:
+        print("\n[ERROR] Input stream closed")
+        return None
 
 def main():
-    global running, game_phase
-    running = True
-    game_phase = "setup"
+    global running
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            s.connect((HOST, PORT))
-            print(f"[INFO] Connected to server at {HOST}:{PORT}\n")
-            print("[INFO] Waiting for the game to start with enough players...\n")
-
+            # Try to connect with retry logic
+            for attempt in range(MAX_RETRIES):
+                try:
+                    s.connect((HOST, PORT))
+                    print(f"[INFO] Connected to server at {HOST}:{PORT}")
+                    break
+                except ConnectionRefusedError:
+                    if attempt < MAX_RETRIES - 1:
+                        print(f"[INFO] Connection refused. Retrying in {RETRY_DELAY} seconds...")
+                        time.sleep(RETRY_DELAY)
+                    else:
+                        print("[ERROR] Could not connect to server after multiple attempts")
+                        sys.exit(1)
+            
+            rfile = s.makefile('r')
+            wfile = s.makefile('w')
+            
             # Start a thread for receiving messages
-            receive_thread = threading.Thread(target=receive_messages, args=(s,))
-            receive_thread.daemon = True
+            receive_thread = threading.Thread(target=receive_messages, args=(rfile,))
+            receive_thread.daemon = True  # Thread will terminate when main thread exits
             receive_thread.start()
-
+            
             # Main thread handles sending user input
             while running:
-                user_input = input("")
-                if not user_input:
+                user_input = get_user_input(">> ")
+                if user_input is None:
                     continue
-
-                # Send the user input with checksum
-                packet = utils.add_checksum(user_input.encode())
-                s.sendall(packet)
-
+                    
+                wfile.write(user_input + '\n')
+                wfile.flush()
+                
                 if user_input.lower() == 'quit':
-                    print("[INFO] You chose to quit.\n")
+                    print("[INFO] You chose to quit.")
                     running = False
                     break
                     
-        except ConnectionRefusedError:
-            print("[ERROR] Connection refused. Make sure the server is running.\n\n")
         except KeyboardInterrupt:
-            print("\n[INFO] Client exiting.\n\n")
+            print("\n[INFO] Client exiting.")
         except Exception as e:
-            print(f"[ERROR] {e}\n\n")
+            print(f"[ERROR] {e}")
         finally:
             running = False
-            print("[INFO] Disconnected from server.\n")
-            
+            print("[INFO] Disconnected from server.")
+
 if __name__ == "__main__":
     main()
