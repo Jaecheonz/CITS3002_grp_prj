@@ -13,6 +13,7 @@ import threading
 import select
 import time
 
+MAX_PLAYERS = 2
 INACTIVITY_TIMEOUT = 15
 BOARD_SIZE = 10
 SHIPS = [
@@ -259,7 +260,7 @@ def parse_coordinate(coord_str):
 
     return (row, col)
 
-def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=None):
+def run_multiplayer_game_online(all_connections):
     """
     Run a 2-player Battleship game with I/O redirected to socket file objects.
     Args:
@@ -269,16 +270,17 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     """
     def send_to_player(player_idx, msg):
         try:
-            player_wfiles[player_idx].write(msg + '\n')
-            player_wfiles[player_idx].flush()
+            all_connections[player_idx][3].write(msg + '\n')
+            all_connections[player_idx][3].flush()
         except:
             raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
 
     def send_to_spectators(msg):
         """Send a message to all spectators."""
-        if spectator_wfiles:
-            for wfile in spectator_wfiles:
+        for i in range(len(all_connections)):
+            if i >= MAX_PLAYERS:
                 try:
+                    wfile = all_connections[i][3]
                     wfile.write(msg + '\n')
                     wfile.flush()
                 except:
@@ -287,24 +289,25 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
     def send_board_to_player(player_idx, board, show_hidden=False):
         """Send the board to a player. If show_hidden is True, show ships."""
         try:
-            player_wfiles[player_idx].write("GRID\n")
-            player_wfiles[player_idx].write("  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n')
+            all_connections[player_idx][3].write("GRID\n")
+            all_connections[player_idx][3].write("  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n')
             for r in range(board.size):
                 row_label = chr(ord('A') + r)
                 # Use hidden_grid if show_hidden is True, otherwise use display_grid
                 grid_to_show = board.hidden_grid if show_hidden else board.display_grid
                 row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
-                player_wfiles[player_idx].write(f"{row_label:2} {row_str}\n")
-            player_wfiles[player_idx].write('\n')
-            player_wfiles[player_idx].flush()
+                all_connections[player_idx][3].write(f"{row_label:2} {row_str}\n")
+            all_connections[player_idx][3].write('\n')
+            all_connections[player_idx][3].flush()
         except:
             raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
 
     def send_board_to_spectators(board):
         """Send the public view of the board to all spectators."""
-        if spectator_wfiles:
-            for wfile in spectator_wfiles:
+        for i in range(len(all_connections)):
+            if i >= MAX_PLAYERS:
                 try:
+                    wfile = all_connections[i][3]
                     wfile.write("GRID\n")
                     wfile.write("  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n')
                     for r in range(board.size):
@@ -320,11 +323,11 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
         """Receive input from a player with timeout."""
         try:
             # Set up select with timeout
-            readable, _, _ = select.select([player_rfiles[player_idx].fileno()], [], [], timeout)
+            readable, _, _ = select.select([all_connections[player_idx][2].fileno()], [], [], timeout)
             if not readable:
                 return None  # Timeout occurred
             
-            line = player_rfiles[player_idx].readline()
+            line = all_connections[player_idx][2].readline()
             if not line:  # Empty string indicates disconnection
                 raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
             return line.strip()
@@ -352,21 +355,16 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                 send_board_to_player(1 - player_idx, boards[1 - player_idx], True)  # Show their own board with ships
                 send_board_to_player(1 - player_idx, boards[player_idx], False)  # Show opponent's board
                 # Send board updates to spectators
-                if spectator_wfiles:
-                    for wfile in spectator_wfiles:
-                        try:
-                            send_to_spectators(f"\nPlayer {player_idx + 1} timed out and gave up their turn.")
-                            if player_idx == 0:
-                                send_to_spectators("\nPlayer 2's turn.")
-                            else:
-                                send_to_spectators("\nPlayer 1's turn.")
-                            send_to_spectators(f"\nPlayer Boards:\n")
-                            send_to_spectators(f"\nPlayer 1's Board:\n")
-                            send_board_to_spectators(boards[0])
-                            send_to_spectators(f"\nPlayer 2's Board:\n")
-                            send_board_to_spectators(boards[1])
-                        except:
-                            continue
+                send_to_spectators(f"\nPlayer {player_idx + 1} timed out and gave up their turn.")
+                if player_idx == 0:
+                    send_to_spectators("\nPlayer 2's turn.")
+                else:
+                    send_to_spectators("\nPlayer 1's turn.")
+                send_to_spectators(f"\nPlayer Boards:\n")
+                send_to_spectators(f"\nPlayer 1's Board:\n")
+                send_board_to_spectators(boards[0])
+                send_to_spectators(f"\nPlayer 2's Board:\n")
+                send_board_to_spectators(boards[1])
                 return None  # Return None to indicate timeout
 
             # Send reminders at 10s and 5s remaining
@@ -460,9 +458,9 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
                             
                             opponent_idx = 1 - player_idx
                             try:
-                                readable, _, _ = select.select([player_rfiles[opponent_idx].fileno()], [], [], 0)
+                                readable, _, _ = select.select([all_connections[opponent_idx][2].fileno()], [], [], 0)
                                 if readable:
-                                    opponent_line = player_rfiles[opponent_idx].readline()
+                                    opponent_line = all_connections[opponent_idx][2].readline()
                                     if not opponent_line:  # Opponent disconnected
                                         raise ConnectionResetError()
                             except (ConnectionResetError, OSError):
@@ -561,63 +559,62 @@ def run_multiplayer_game_online(player_rfiles, player_wfiles, spectator_wfiles=N
             send_to_spectators(f"\nPlayer 2's Board:\n")
             send_board_to_spectators(boards[1])
             
-            
             # Get firing coordinate from current player
-            while True:
-                try:
-                    coord_str = handle_input_during_turn(current_player)
-                    if coord_str is None:  # Timeout or disconnection
-                        current_player = 1 - current_player  # Switch turns
-                        continue
+            # while True:
+            #     try:
+            #         coord_str = handle_input_during_turn(current_player)
+            #         if coord_str is None:  # Timeout or disconnection
+            #             current_player = 1 - current_player  # Switch turns
+            #             continue
                     
-                    # Process the coordinate
-                    try:
-                        row, col = parse_coordinate(coord_str)
-                    except ValueError as e:
-                        send_to_player(current_player, f"Invalid coordinate: {e}")
-                        continue
+            #         # Process the coordinate
+            #         try:
+            #             row, col = parse_coordinate(coord_str)
+            #         except ValueError as e:
+            #             send_to_player(current_player, f"Invalid coordinate: {e}")
+            #             continue
                     
-                    result, sunk_name = boards[1 - current_player].fire_at(row, col)
+            #         result, sunk_name = boards[1 - current_player].fire_at(row, col)
                     
-                    # Update all players and spectators
-                    if result == 'hit':
-                        if sunk_name:
-                            send_to_player(current_player, f"HIT! You sank the {sunk_name}!")
-                            send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
-                            send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
-                        else:
-                            send_to_player(current_player, "HIT!")
-                            send_to_player(1 - current_player, f"Your ship was hit at {coord_str}!")
-                            send_to_spectators(f"Player {current_player + 1} hit a ship at {coord_str}!")
+            #         # Update all players and spectators
+            #         if result == 'hit':
+            #             if sunk_name:
+            #                 send_to_player(current_player, f"HIT! You sank the {sunk_name}!")
+            #                 send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
+            #                 send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
+            #             else:
+            #                 send_to_player(current_player, "HIT!")
+            #                 send_to_player(1 - current_player, f"Your ship was hit at {coord_str}!")
+            #                 send_to_spectators(f"Player {current_player + 1} hit a ship at {coord_str}!")
                         
-                        if boards[1 - current_player].all_ships_sunk():
-                            send_to_player(current_player, "Congratulations! You sank all ships!")
-                            send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
-                            send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
-                            return
-                    elif result == 'miss':
-                        send_to_player(current_player, "MISS!")
-                        send_to_player(1 - current_player, f"Opponent fired at {coord_str} and missed.")
-                        send_to_spectators(f"Player {current_player + 1} missed at {coord_str}!")
-                    elif result == 'already_shot':
-                        send_to_player(current_player, "You've already fired at that location.")
-                        continue
+            #             if boards[1 - current_player].all_ships_sunk():
+            #                 send_to_player(current_player, "Congratulations! You sank all ships!")
+            #                 send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
+            #                 send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
+            #                 return
+            #         elif result == 'miss':
+            #             send_to_player(current_player, "MISS!")
+            #             send_to_player(1 - current_player, f"Opponent fired at {coord_str} and missed.")
+            #             send_to_spectators(f"Player {current_player + 1} missed at {coord_str}!")
+            #         elif result == 'already_shot':
+            #             send_to_player(current_player, "You've already fired at that location.")
+            #             continue
                     
-                    # Update spectator boards after each move
-                    send_to_spectators(f"\nPlayer 1's Board:\n")
-                    send_board_to_spectators(boards[0])
-                    send_to_spectators(f"\nPlayer 2's Board:\n")
-                    send_board_to_spectators(boards[1])
+            #         # Update spectator boards after each move
+            #         send_to_spectators(f"\nPlayer 1's Board:\n")
+            #         send_board_to_spectators(boards[0])
+            #         send_to_spectators(f"\nPlayer 2's Board:\n")
+            #         send_board_to_spectators(boards[1])
                     
-                except ValueError as e:
-                    send_to_player(current_player, f"Invalid input: {e}")
-                    continue
+            #     except ValueError as e:
+            #         send_to_player(current_player, f"Invalid input: {e}")
+            #         continue
                 
-                # Switch players
-                current_player = 1 - current_player
-                last_move_time = time.time()
-                break
-            
+            #     # Switch players
+            #     current_player = 1 - current_player
+            #     last_move_time = time.time()
+            #     break
+            return
         except ConnectionResetError as e:
             # Player disconnected during gameplay
             send_to_player(1 - current_player, f"[INFO] {e}")
