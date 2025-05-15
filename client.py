@@ -7,6 +7,7 @@ import threading
 import sys
 import time
 import select
+from protocol import safe_send, safe_recv, PACKET_TYPES
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -18,32 +19,30 @@ RETRY_DELAY = 2
 # Global flag for controlling the client loop
 running = True
 
-def receive_messages(rfile):
+def receive_messages(rfile, wfile):
     """Continuously receive and print messages from the server."""
     global running
     try:
         while running:
-            # Read directly from the file object instead of using select
-            line = rfile.readline()
-            if not line:  # Server closed connection
+            message = safe_recv(rfile, wfile)
+            if message is None:  # Server closed connection or invalid packet
                 print("\n[INFO] Server closed the connection")
                 break
                 
-            line = line.strip()
-            if not line:
+            if not message:
                 continue
                 
             # Check if this is a grid message
-            if line == "GRID":
+            if message == "GRID":
                 # Print the grid
                 while True:
-                    grid_line = rfile.readline().strip()
+                    grid_line = safe_recv(rfile, wfile)
                     if not grid_line:
                         break
                     print(grid_line)
                 print()  # Add extra newline after grid
             else:
-                print(line)
+                print(message)
                 
     except ConnectionResetError:
         print("\n[ERROR] Connection to server was reset")
@@ -85,11 +84,12 @@ def main():
                         print("[ERROR] Could not connect to server after multiple attempts")
                         sys.exit(1)
             
-            rfile = s.makefile('r')
-            wfile = s.makefile('w')
+            # Use binary mode for file objects
+            rfile = s.makefile('rb')
+            wfile = s.makefile('wb')
             
             # Start a thread for receiving messages
-            receive_thread = threading.Thread(target=receive_messages, args=(rfile,))
+            receive_thread = threading.Thread(target=receive_messages, args=(rfile, wfile))
             receive_thread.daemon = True  # Thread will terminate when main thread exits
             receive_thread.start()
             
@@ -99,8 +99,7 @@ def main():
                 if user_input is None:
                     continue
                     
-                wfile.write(user_input + '\n')
-                wfile.flush()
+                safe_send(wfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
                 
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.")

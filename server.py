@@ -7,6 +7,8 @@ import threading
 import select
 import time
 from battleship import run_multiplayer_game_online
+import struct
+from protocol import Packet, PACKET_TYPES, next_sequence_num, safe_send, safe_recv
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -70,14 +72,6 @@ def handle_p1_quit(conn):
 
     try:
         conn.close()
-    except:
-        pass
-
-def safe_send(wfile, message):
-    """Safely send a message to a client."""
-    try:
-        wfile.write(message)
-        wfile.flush()
     except:
         pass
 
