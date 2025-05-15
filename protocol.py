@@ -128,6 +128,12 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         packet = Packet(packet_type, next_sequence_num(), payload)
         packed_data = packet.pack()
         
+        # For critical messages (like board updates and waiting messages), use immediate delivery
+        if packet_type in [PACKET_TYPES['BOARD_UPDATE'], PACKET_TYPES['GAME_UPDATE']]:
+            wfile.write(packed_data)
+            wfile.flush()
+            return True
+        
         # Try to send with retries
         for attempt in range(MAX_RETRIES):
             wfile.write(packed_data)
@@ -181,8 +187,9 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
             request_retransmission(wfile)
             return None
             
-        # Send ACK
-        send_ack(wfile, packet.sequence_num)
+        # Send ACK for non-critical messages
+        if packet.packet_type not in [PACKET_TYPES['BOARD_UPDATE'], PACKET_TYPES['GAME_UPDATE']]:
+            send_ack(wfile, packet.sequence_num)
         
         # Don't process ACK packets as messages
         if packet.packet_type == PACKET_TYPES['ACK']:

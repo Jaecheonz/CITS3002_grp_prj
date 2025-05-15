@@ -249,9 +249,9 @@ def start_game_countdown():
         with connection_lock:
             for _, _, rf, wf, num in all_connections:
                 if num <= MAX_PLAYERS:
-                    safe_send(wf, rf, f"[INFO] Game has ended. You were Player {num}.\n\n[INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
+                    safe_send(wf, rf, f"[INFO] Game has ended. You were Player {num}.\n\n[INFO] Next game will start after the {GAME_START_DELAY} second timer ends\n\n")
                 else:
-                    safe_send(wf, rf, f"[INFO] Game has ended. You were Spectator {num - MAX_PLAYERS}.\n\n[INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
+                    safe_send(wf, rf, f"[INFO] Game has ended. You were Spectator {num - MAX_PLAYERS}.\n\n[INFO] Next game will start after the {GAME_START_DELAY} second timer ends\n\n")
         
         # Wait before starting new game
         time.sleep(GAME_END_DELAY)

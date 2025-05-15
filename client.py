@@ -32,14 +32,9 @@ def receive_messages(rfile, wfile):
                 continue
                 
             # Check if this is a grid message
-            if message == "GRID":
-                # Print the grid
-                while True:
-                    grid_line = safe_recv(rfile, wfile)
-                    if not grid_line:
-                        break
-                    print(grid_line)
-                print()  # Add extra newline after grid
+            if message.startswith("GRID"):
+                # Print the entire grid message
+                print(message)
             else:
                 print(message)
                 

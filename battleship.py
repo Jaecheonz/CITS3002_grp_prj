@@ -289,28 +289,38 @@ def run_multiplayer_game_online(all_connections):
     def send_board_to_player(player_idx, board, show_hidden=False):
         """Send a board representation to a specific player."""
         try:
-            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "GRID", PACKET_TYPES['BOARD_UPDATE'])
-            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
+            # Build the entire board message as a single string
+            board_msg = "GRID\n"  # Start with GRID marker
+            board_msg += "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n'
             for row in range(board.size):
                 row_label = chr(65 + row)  # A, B, C, ...
                 row_str = " ".join(board.hidden_grid[row] if show_hidden else board.display_grid[row])
-                safe_send(all_connections[player_idx][3], all_connections[player_idx][2], f"{row_label:2} {row_str}")
-            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "")  # Empty line to end grid
+                board_msg += f"{row_label:2} {row_str}\n"
+            board_msg += '\n'  # Empty line to end grid
+            
+            # Send the entire board as a single message
+            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], board_msg, PACKET_TYPES['BOARD_UPDATE'])
+            time.sleep(0.1)  # Add a small delay to prevent message duplication
         except Exception as e:
             print(f"Error sending board to player {player_idx}: {e}")
 
     def send_board_to_spectators(board):
         """Send a board representation to all spectators."""
         try:
+            # Build the entire board message as a single string
+            board_msg = "GRID\n"  # Start with GRID marker
+            board_msg += "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n'
+            for row in range(board.size):
+                row_label = chr(65 + row)  # A, B, C, ...
+                row_str = " ".join(board.display_grid[row])
+                board_msg += f"{row_label:2} {row_str}\n"
+            board_msg += '\n'  # Empty line to end grid
+            
+            # Send the entire board as a single message to each spectator
             for i in range(MAX_PLAYERS, len(all_connections)):
                 if all_connections[i] is not None:
-                    safe_send(all_connections[i][3], all_connections[i][2], "GRID", PACKET_TYPES['BOARD_UPDATE'])
-                    safe_send(all_connections[i][3], all_connections[i][2], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
-                    for row in range(board.size):
-                        row_label = chr(65 + row)  # A, B, C, ...
-                        row_str = " ".join(board.display_grid[row])
-                        safe_send(all_connections[i][3], all_connections[i][2], f"{row_label:2} {row_str}")
-                    safe_send(all_connections[i][3], all_connections[i][2], "")  # Empty line to end grid
+                    safe_send(all_connections[i][3], all_connections[i][2], board_msg, PACKET_TYPES['BOARD_UPDATE'])
+                    time.sleep(0.1)  # Add a small delay to prevent message duplication
         except Exception as e:
             print(f"Error sending board to spectators: {e}")
 
