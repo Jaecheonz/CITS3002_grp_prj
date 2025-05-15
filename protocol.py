@@ -120,9 +120,6 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
     try:
         # Convert message to bytes if it's a string
         if isinstance(message, str):
-            # Add newline to string messages
-            if not message.endswith('\n'):
-                message += '\n'
             payload = message.encode('utf-8')
         else:
             payload = message

@@ -270,73 +270,58 @@ def run_multiplayer_game_online(all_connections):
         player_wfiles: List of 2 file-like objects to .write() back to clients
         spectator_wfiles: List of file-like objects to .write() to spectators
     """
-    def send_to_player(player_idx, msg):
-        """Send a message to a player."""
+    def send_to_player(player_idx, msg, packet_type=PACKET_TYPES['SYSTEM_MESSAGE']):
+        """Send a message to a specific player."""
         try:
-            # Use SYSTEM_MESSAGE for info messages, GAME_UPDATE for game state
-            packet_type = PACKET_TYPES['SYSTEM_MESSAGE'] if msg.startswith('[INFO]') else PACKET_TYPES['GAME_UPDATE']
-            safe_send(all_connections[player_idx][3], msg, packet_type)
+            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], msg, packet_type)
         except Exception as e:
-            logging.error(f"Failed to send to player {player_idx + 1}: {str(e)}")
-            raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
+            print(f"Error sending to player {player_idx}: {e}")
 
-    def send_to_spectators(msg):
+    def send_to_spectators(msg, packet_type=PACKET_TYPES['SYSTEM_MESSAGE']):
         """Send a message to all spectators."""
-        for i in range(len(all_connections)):
-            if i >= MAX_PLAYERS:
-                try:
-                    packet_type = PACKET_TYPES['SYSTEM_MESSAGE'] if msg.startswith('[INFO]') else PACKET_TYPES['GAME_UPDATE']
-                    safe_send(all_connections[i][3], msg, packet_type)
-                except Exception as e:
-                    logging.error(f"Failed to send to spectator {i - MAX_PLAYERS + 1}: {str(e)}")
-                    continue  # Skip failed spectator sends
+        try:
+            for i in range(MAX_PLAYERS, len(all_connections)):
+                if all_connections[i] is not None:
+                    safe_send(all_connections[i][3], all_connections[i][2], msg, packet_type)
+        except Exception as e:
+            print(f"Error sending to spectators: {e}")
 
     def send_board_to_player(player_idx, board, show_hidden=False):
-        """Send the board to a player. If show_hidden is True, show ships."""
+        """Send a board representation to a specific player."""
         try:
-            safe_send(all_connections[player_idx][3], "GRID", PACKET_TYPES['BOARD_UPDATE'])
-            safe_send(all_connections[player_idx][3], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
-            for r in range(board.size):
-                row_label = chr(ord('A') + r)
-                grid_to_show = board.hidden_grid if show_hidden else board.display_grid
-                row_str = " ".join(grid_to_show[r][c] for c in range(board.size))
-                safe_send(all_connections[player_idx][3], f"{row_label:2} {row_str}")
-            safe_send(all_connections[player_idx][3], "")  # Empty line to end grid
+            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "GRID", PACKET_TYPES['BOARD_UPDATE'])
+            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
+            for row in range(board.size):
+                row_label = chr(65 + row)  # A, B, C, ...
+                row_str = " ".join(board.hidden_grid[row] if show_hidden else board.display_grid[row])
+                safe_send(all_connections[player_idx][3], all_connections[player_idx][2], f"{row_label:2} {row_str}")
+            safe_send(all_connections[player_idx][3], all_connections[player_idx][2], "")  # Empty line to end grid
         except Exception as e:
-            logging.error(f"Failed to send board to player {player_idx + 1}: {str(e)}")
-            raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
+            print(f"Error sending board to player {player_idx}: {e}")
 
     def send_board_to_spectators(board):
-        """Send the public view of the board to all spectators."""
-        for i in range(len(all_connections)):
-            if i >= MAX_PLAYERS:
-                try:
-                    safe_send(all_connections[i][3], "GRID", PACKET_TYPES['BOARD_UPDATE'])
-                    safe_send(all_connections[i][3], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
-                    for r in range(board.size):
-                        row_label = chr(ord('A') + r)
-                        row_str = " ".join(board.display_grid[r][c] for c in range(board.size))
-                        safe_send(all_connections[i][3], f"{row_label:2} {row_str}")
-                    safe_send(all_connections[i][3], "")  # Empty line to end grid
-                except Exception as e:
-                    logging.error(f"Failed to send board to spectator {i - MAX_PLAYERS + 1}: {str(e)}")
-                    continue  # Skip failed spectator sends
+        """Send a board representation to all spectators."""
+        try:
+            for i in range(MAX_PLAYERS, len(all_connections)):
+                if all_connections[i] is not None:
+                    safe_send(all_connections[i][3], all_connections[i][2], "GRID", PACKET_TYPES['BOARD_UPDATE'])
+                    safe_send(all_connections[i][3], all_connections[i][2], "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)))
+                    for row in range(board.size):
+                        row_label = chr(65 + row)  # A, B, C, ...
+                        row_str = " ".join(board.display_grid[row])
+                        safe_send(all_connections[i][3], all_connections[i][2], f"{row_label:2} {row_str}")
+                    safe_send(all_connections[i][3], all_connections[i][2], "")  # Empty line to end grid
+        except Exception as e:
+            print(f"Error sending board to spectators: {e}")
 
     def recv_from_player(player_idx, timeout=INACTIVITY_TIMEOUT):
-        """Receive input from a player with timeout."""
+        """Receive a message from a specific player."""
         try:
-            # Client sends as PLAYER_MOVE, so we should expect that type
-            message = safe_recv(all_connections[player_idx][2], timeout)
-            if message is None:  # Timeout or invalid packet
-                logging.warning(f"Timeout or invalid packet from player {player_idx + 1}")
-                return None
-            if not message:  # Empty message indicates disconnection
-                logging.error(f"Empty message from player {player_idx + 1}")
-                raise ConnectionResetError(f"Player {player_idx + 1} disconnected")
-            return message.strip()
-        except (ConnectionError, IOError, ValueError) as e:
-            logging.error(f"Error receiving from player {player_idx + 1}: {str(e)}")
-            raise ConnectionResetError(f"Player {player_idx + 1} disconnected: {str(e)}")
+            message = safe_recv(all_connections[player_idx][2], all_connections[player_idx][3], timeout)
+            return message
+        except Exception as e:
+            print(f"Error receiving from player {player_idx}: {e}")
+            return None
 
     def handle_input_during_turn(player_idx, timeout=INACTIVITY_TIMEOUT):
         """Handle input during a player's turn, warning other players who try to input."""

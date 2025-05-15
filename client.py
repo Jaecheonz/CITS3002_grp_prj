@@ -25,9 +25,8 @@ def receive_messages(rfile, wfile):
     try:
         while running:
             message = safe_recv(rfile, wfile)
-            if message is None:  # Server closed connection or invalid packet
-                print("\n[INFO] Server closed the connection")
-                break
+            if message is None:  # Timeout or invalid packet
+                continue  # Just continue the loop on timeout
                 
             if not message:
                 continue
@@ -99,7 +98,7 @@ def main():
                 if user_input is None:
                     continue
                     
-                safe_send(wfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
+                safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
                 
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.")

@@ -123,7 +123,7 @@ def check_all_connections(check_index=None):
                         spectator_count += 1
                         conn, addr, rfile, wfile, _ = all_connections[j]
                         all_connections[j] = (conn, addr, rfile, wfile, MAX_PLAYERS + spectator_count)
-                        safe_send(wfile, f"[INFO] You are now Spectator {spectator_count}.\n\n")
+                        safe_send(wfile, rfile, f"[INFO] You are now Spectator {spectator_count}.\n\n")
                 print(f"[INFO] Spectator {num - MAX_PLAYERS} disconnected.\n")
         # Clear the list after processing
         disconnected_indices.clear()
@@ -142,15 +142,17 @@ def handle_client(conn, addr):
         with connection_lock:
             if len(all_connections) >= MAX_PLAYERS + MAX_SPECTATORS:
                 # Too many total connections
-                wfile = conn.makefile('w')
-                safe_send(wfile, f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_PLAYERS + MAX_SPECTATORS}). Please try again later.\n\n")
+                wfile = conn.makefile('wb')
+                rfile = conn.makefile('rb')
+                safe_send(wfile, rfile, f"[INFO] Sorry, the server has reached the maximum number of connections ({MAX_PLAYERS + MAX_SPECTATORS}). Please try again later.\n\n")
                 wfile.close()
+                rfile.close()
                 conn.close()
                 return
             
             # Wrap the connection with file handlers
-            rfile = conn.makefile('r')
-            wfile = conn.makefile('w')
+            rfile = conn.makefile('rb')
+            wfile = conn.makefile('wb')
             
             # Add to main list
             connection_num = len(all_connections) + 1
@@ -158,30 +160,30 @@ def handle_client(conn, addr):
             
             # Determine if they're an active player or spectator
             if connection_num <= MAX_PLAYERS and not game_in_progress:
-                safe_send(wfile, f"[INFO] Welcome! You are Player {connection_num}.\n\n")
+                safe_send(wfile, rfile, f"[INFO] Welcome! You are Player {connection_num}.\n\n")
                 if connection_num < MAX_PLAYERS:
-                    safe_send(wfile, f"[INFO] Waiting for Player {MAX_PLAYERS} to connect...\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Waiting for Player {MAX_PLAYERS} to connect...\n\n")
             else:
-                safe_send(wfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
+                safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
                 if game_in_progress:
-                    safe_send(wfile, f"[INFO] Current game in progress. You will receive game updates.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Current game in progress. You will receive game updates.\n\n")
                 else:
-                    safe_send(wfile, f"[INFO] Waiting for game to start. You will be notified when it begins.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Waiting for game to start. You will be notified when it begins.\n\n")
             
-            safe_send(wfile, "[TIP] Type 'quit' to exit.\n\n")
+            safe_send(wfile, rfile, "[TIP] Type 'quit' to exit.\n\n")
             
             # Notify all connected clients
-            for c, _, _, wf, _ in all_connections:
+            for c, _, rf, wf, _ in all_connections:
                 if c != conn:
-                    safe_send(wf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n\n")
+                    safe_send(wf, rf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n\n")
             
             # Check if ready to start countdown
             if len(get_active_players()) == MAX_PLAYERS and not game_in_progress:
                 with countdown_timer_lock:
                     if not countdown_timer_running:
                         countdown_timer_running = True
-                        for _, _, _, wf, _ in all_connections:
-                            safe_send(wf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
+                        for _, _, rf, wf, _ in all_connections:
+                            safe_send(wf, rf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
                         
                         # Start countdown thread
                         start_timer_thread = threading.Thread(target=start_game_countdown)
@@ -223,8 +225,8 @@ def start_game_countdown():
             # Wait until next announcement
             # Send countdown message to all players
                 with connection_lock:
-                    for _, _, _, wfile, _ in all_connections:
-                        safe_send(wfile, f"[INFO] Game starting in {i} seconds...\n\n")
+                    for _, _, rf, wf, _ in all_connections:
+                        safe_send(wf, rf, f"[INFO] Game starting in {i} seconds...\n\n")
             time.sleep(1)
         
         with game_in_progress_lock:
@@ -234,22 +236,22 @@ def start_game_countdown():
         
         # Notify all players that the game is starting
         with connection_lock:
-            for _, _, _, wfile, num in all_connections:
+            for _, _, rf, wf, num in all_connections:
                 if num <= MAX_PLAYERS:
-                    safe_send(wfile, f"[INFO] Game is starting! You are Player {num}.\n\n")
+                    safe_send(wf, rf, f"[INFO] Game is starting! You are Player {num}.\n\n")
                 else:
-                    safe_send(wfile, "[INFO] Game is starting!\n\n")
+                    safe_send(wf, rf, "[INFO] Game is starting!\n\n")
         
         # Start the game
         run_multiplayer_game_online(all_connections)
         
         # After game ends, notify all players
         with connection_lock:
-            for _, _, _, wfile, num in all_connections:
+            for _, _, rf, wf, num in all_connections:
                 if num <= MAX_PLAYERS:
-                    safe_send(wfile, f"[INFO] Game has ended. You were Player {num}.\n\n [INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
+                    safe_send(wf, rf, f"[INFO] Game has ended. You were Player {num}.\n\n[INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
                 else:
-                    safe_send(wfile, f"[INFO] Game has ended. You were Spectator {num - MAX_PLAYERS}.\n\n [INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
+                    safe_send(wf, rf, f"[INFO] Game has ended. You were Spectator {num - MAX_PLAYERS}.\n\n[INFO] Next game will start in {GAME_START_DELAY} seconds\n\n")
         
         # Wait before starting new game
         time.sleep(GAME_END_DELAY)
@@ -274,7 +276,7 @@ def start_game_countdown():
                 all_connections[1] = None
                 # Notify the player about their new position
                 _, _, _, wfile, _ = all_connections[0]
-                safe_send(wfile, f"[INFO] You will be Player 1 in the next game!\n\n")
+                safe_send(wfile, rfile, f"[INFO] You will be Player 1 in the next game!\n\n")
                 print(f"[DEBUG] moved P2 to P1 position")
             
             # Promote spectators to fill vacant player slots
@@ -291,7 +293,7 @@ def start_game_countdown():
                             all_connections.pop(i)
                             # Notify the promoted spectator
                             _, _, _, wfile, _ = all_connections[slot]
-                            safe_send(wfile, f"[INFO] You have been promoted to Player {slot + 1} for the next game!\n\n")
+                            safe_send(wfile, rfile, f"[INFO] You have been promoted to Player {slot + 1} for the next game!\n\n")
                             break
             
             # Update remaining spectator positions
@@ -301,18 +303,18 @@ def start_game_countdown():
                     spectator_count += 1
                     conn, addr, rfile, wfile, _ = all_connections[i]
                     all_connections[i] = (conn, addr, rfile, wfile, MAX_PLAYERS + spectator_count)
-                    safe_send(wfile, f"[INFO] You are now Spectator {spectator_count}.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] You are now Spectator {spectator_count}.\n\n")
             
             # Notify all spectators about the next players
             for i in range(MAX_PLAYERS, len(all_connections)):
                 if all_connections[i] is not None:
                     _, _, _, wfile, _ = all_connections[i]
-                    safe_send(wfile, f"[INFO] The next game will be played by:\n")
+                    safe_send(wfile, rfile, f"[INFO] The next game will be played by:\n")
                     for j in range(MAX_PLAYERS):
                         if all_connections[j] is not None:
                             _, addr, _, _, num = all_connections[j]
-                            safe_send(wfile, f"  Player {num}: {addr[0]}:{addr[1]}\n")
-                    safe_send(wfile, f"\nGame will start in {GAME_START_DELAY} seconds.\n\n")
+                            safe_send(wfile, rfile, f"  Player {num}: {addr[0]}:{addr[1]}\n")
+                    safe_send(wfile, rfile, f"\nGame will start in {GAME_START_DELAY} seconds.\n\n")
                     
             # Update player numbers
             for i in range(len(all_connections)):
@@ -320,9 +322,9 @@ def start_game_countdown():
                     conn, addr, rfile, wfile, _ = all_connections[i]
                     all_connections[i] = (conn, addr, rfile, wfile, i + 1)
                     if i < MAX_PLAYERS:
-                        safe_send(wfile, f"[INFO] You will be Player {i + 1} in the next game!\n\n")
+                        safe_send(wfile, rfile, f"[INFO] You will be Player {i + 1} in the next game!\n\n")
                     else:
-                        safe_send(wfile, f"[INFO] You are Spectator {i - MAX_PLAYERS + 1}.\n\n")
+                        safe_send(wfile, rfile, f"[INFO] You are Spectator {i - MAX_PLAYERS + 1}.\n\n")
 
         print(f"[DEBUG] Number of connections: {len(all_connections)}")
         print(f"[DEBUG] Countdown timer running: {countdown_timer_running}")
@@ -344,7 +346,7 @@ def start_game_countdown():
         else:
             print("[DEBUG] Not enough players for next game")
             for _, _, _, wfile, _ in get_spectators():
-                safe_send(wfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
+                safe_send(wfile, rfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
     
     except Exception as e:
         print(f"[ERROR] Error in game countdown: {e}\n")
@@ -387,7 +389,7 @@ def main():
             with connection_lock:
                 for _, _, _, wfile, _ in all_connections:
                     try:
-                        wfile.write("[INFO] Server is shutting down. Disconnecting all players.\n\n")
+                        wfile.write(b"[INFO] Server is shutting down. Disconnecting all players.\n\n")
                         wfile.flush()
                     except:
                         pass
