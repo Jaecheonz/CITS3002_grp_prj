@@ -85,20 +85,17 @@ def wait_for_player_reconnect(disconnected_index):
     start_time = time.time()
 
     print(f"[INFO] Waiting for Player {disconnected_index + 1} to reconnect...\n")
-    safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} has disconnected. Waiting for reconnection...\n\n")
     # Wait for a maximum of CONNECTION_TIMEOUT seconds
     while time.time() < start_time + CONNECTION_TIMEOUT:
         if all_connections[disconnected_index] is not None:
             # Player has reconnected
             print(f"[INFO] Player {disconnected_index + 1} has reconnected.\n")
-            safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} has reconnected. Resuming game...\n\n")
             player_reconnecting.set()
             return True
-        time.sleep(0.5)  
+        time.sleep(1)
     else:
         # Timeout reached, player did not reconnect
         print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
-        safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n\n")
         # Handle disconnection
         with connection_lock:
             all_connections[disconnected_index] = None
@@ -201,19 +198,29 @@ def handle_client(conn, addr):
             rfile = conn.makefile('rb')
             wfile = conn.makefile('wb')
             
-            # Add to main list
-            connection_num = len(all_connections) + 1
-            all_connections.append((conn, addr, rfile, wfile, connection_num))
-            
+            # Add to main list, reusing None slots if available
+            connection_num = None
+            for i in range(len(all_connections)):
+                if all_connections[i] is None:
+                    connection_num = i + 1
+                    all_connections[i] = (conn, addr, rfile, wfile, connection_num)
+                    break
+            if connection_num is None:
+                connection_num = len(all_connections) + 1
+                all_connections.append((conn, addr, rfile, wfile, connection_num))
+
             # Determine if they're an active player or spectator
             if connection_num <= MAX_PLAYERS and not game_in_progress:
                 safe_send(wfile, rfile, f"[INFO] Welcome! You are Player {connection_num}.\n\n")
                 if connection_num < MAX_PLAYERS:
                     safe_send(wfile, rfile, f"[INFO] Waiting for Player {MAX_PLAYERS} to connect...\n\n")
             else:
-                # add reconecting player to the list
-
-                safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
+                if game_in_progress and not player_reconnecting.is_set():
+                    # If game is in progress and player reconnects
+                    safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {connection_num}.\n\n")
+                    player_reconnecting.set()
+                else:
+                    safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
                 if game_in_progress:
                     safe_send(wfile, rfile, f"[INFO] Current game in progress. You will receive game updates.\n\n")
                 else:

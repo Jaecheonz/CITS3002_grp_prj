@@ -546,8 +546,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     last_move_time = time.time()
     
     while True:
+        player_reconnecting.wait()
         try:
-            player_reconnecting.wait()
             # Show boards to current player
             send_to_player(current_player, "Your board:")
             send_board_to_player(current_player, boards[current_player], True)
@@ -620,7 +620,10 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 last_move_time = time.time()
                 break
         except ConnectionResetError as e:
-            # Player disconnected during gameplay
-            send_to_player(1 - current_player, f"[INFO] {e}")
-            send_to_spectators(f"[INFO] {e}")
-            return
+            if not player_reconnecting.is_set():
+                # Player reconnected
+                send_to_player(current_player, f"[INFO] {e}")
+                send_to_spectators(f"[INFO] {e}")
+                return
+            else:
+                continue
