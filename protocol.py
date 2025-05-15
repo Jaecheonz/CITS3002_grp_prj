@@ -133,8 +133,8 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
             wfile.write(packed_data)
             wfile.flush()
             
-            # Wait for ACK
-            if wait_for_ack(rfile, packet.sequence_num):
+            # Wait for ACK with a shorter timeout
+            if wait_for_ack(rfile, packet.sequence_num, timeout=0.5):
                 return True
                 
             logger.warning(f"Retransmission attempt {attempt + 1} for packet {packet.sequence_num}")
@@ -162,7 +162,7 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
             
         # Unpack header to get payload length
         try:
-            _, _, _, payload_len, _ = struct.unpack('!BBLHB', header)
+            packet_type, sequence_num, checksum, payload_len, _ = struct.unpack('!BBLHB', header)
         except struct.error as e:
             logger.error(f"Failed to unpack header during packet reception: {str(e)}")
             return None
@@ -184,6 +184,10 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
         # Send ACK
         send_ack(wfile, packet.sequence_num)
         
+        # Don't process ACK packets as messages
+        if packet.packet_type == PACKET_TYPES['ACK']:
+            return None
+            
         return packet.payload.decode('utf-8')
     except Exception as e:
         logger.error(f"Error receiving packet: {str(e)}")
@@ -200,9 +204,12 @@ def wait_for_ack(rfile, sequence_num, timeout=1.0):
                 if not header:
                     continue
                     
-                packet_type, ack_seq, _, _, _ = struct.unpack('!BBLHB', header)
-                if packet_type == PACKET_TYPES['ACK'] and ack_seq == sequence_num:
-                    return True
+                try:
+                    packet_type, ack_seq, _, _, _ = struct.unpack('!BBLHB', header)
+                    if packet_type == PACKET_TYPES['ACK'] and ack_seq == sequence_num:
+                        return True
+                except struct.error:
+                    continue
         except Exception as e:
             logger.error(f"Error waiting for ACK: {str(e)}")
             continue

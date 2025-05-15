@@ -410,6 +410,7 @@ def run_multiplayer_game_online(all_connections):
                     boards[player_idx].place_ships_randomly(SHIPS)
                     send_to_player(player_idx, "Ships placed randomly due to timeout.")
                     send_board_to_player(player_idx, boards[player_idx], True)
+                    send_to_player(player_idx, "Waiting for opponent to place their ships...")
                     setup_success[player_idx] = True
                     player_ready_events[player_idx].set()
                     return
@@ -418,6 +419,7 @@ def run_multiplayer_game_online(all_connections):
                     boards[player_idx].place_ships_randomly(SHIPS)
                     send_to_player(player_idx, "Ships placed randomly.")
                     send_board_to_player(player_idx, boards[player_idx], True)
+                    send_to_player(player_idx, "Waiting for opponent to place their ships...")
                     setup_success[player_idx] = True
                     player_ready_events[player_idx].set()
                     return
@@ -441,6 +443,7 @@ def run_multiplayer_game_online(all_connections):
                                 boards[player_idx].place_ships_randomly(remaining_ships)
                                 send_to_player(player_idx, "Remaining ships placed randomly due to timeout.")
                                 send_board_to_player(player_idx, boards[player_idx], True)
+                                send_to_player(player_idx, "Waiting for opponent to place their ships...")
                                 setup_success[player_idx] = True
                                 player_ready_events[player_idx].set()
                                 return
@@ -490,6 +493,8 @@ def run_multiplayer_game_online(all_connections):
                             send_to_player(player_idx, f"Invalid input: {e}")
                     
                     # All ships placed successfully
+                    send_to_player(player_idx, "Your ships have been placed successfully!")
+                    send_to_player(player_idx, "Waiting for opponent to place their ships...")
                     setup_success[player_idx] = True
                     player_ready_events[player_idx].set()
                     return
