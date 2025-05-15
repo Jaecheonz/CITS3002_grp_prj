@@ -19,6 +19,7 @@ MAX_SPECTATORS = 12  # Maximum number of spectators allowed (increased to accomm
 GAME_START_DELAY = 8  # Seconds to wait after minimum players join before starting
 INACTIVITY_TIMEOUT = 30  # Seconds before a player's turn is skipped
 GAME_END_DELAY = 10  # Seconds to wait after game ends before starting new game
+CONNECTION_TIMEOUT = 30  # Seconds before a connection is considered inactive
 
 # Global variables to track connections and games
 all_connections = []  # List of (conn, addr, rfile, wfile, player_num) for all connections
@@ -28,6 +29,8 @@ game_in_progress_lock = threading.Lock()
 game_ready_event = threading.Event()
 countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
+player_reconnecting = threading.Event()
+player_reconnecting.set()
 
 def get_active_players():
     """Get the first two players from all_connections."""
@@ -75,9 +78,38 @@ def handle_p1_quit(conn):
     except:
         pass
 
+def wait_for_player_reconnect(disconnected_index):
+    """Wait for a player to reconnect after disconnection."""
+    global all_connections, player_reconnecting
+    
+    start_time = time.time()
+
+    print(f"[INFO] Waiting for Player {disconnected_index + 1} to reconnect...\n")
+    safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} has disconnected. Waiting for reconnection...\n\n")
+    # Wait for a maximum of CONNECTION_TIMEOUT seconds
+    while time.time() < start_time + CONNECTION_TIMEOUT:
+        if all_connections[disconnected_index] is not None:
+            # Player has reconnected
+            print(f"[INFO] Player {disconnected_index + 1} has reconnected.\n")
+            safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} has reconnected. Resuming game...\n\n")
+            player_reconnecting.set()
+            return True
+        time.sleep(0.5)  
+    else:
+        # Timeout reached, player did not reconnect
+        print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
+        safe_send(all_connections, f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n\n")
+        # Handle disconnection
+        with connection_lock:
+            all_connections[disconnected_index] = None
+            player_reconnecting.clear()
+            print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
+            return False
+
 def check_all_connections(check_index=None):
     """Check all connections in the server and handle disconnections appropriately.
     If check_index is provided, only check that specific index."""
+    global all_connections, player_reconnecting
     # First, check connections without holding the lock
     disconnected_indices = []
     print(f"[DEBUG] Starting connection check.")
@@ -111,8 +143,14 @@ def check_all_connections(check_index=None):
             if num <= MAX_PLAYERS:  # This is a player
                 # Set their data to None instead of removing
                 all_connections[i] = None
-                # TODO: Set event to pause game until player returns
+                player_reconnecting.clear()
                 print(f"[INFO] Player {num} disconnected. Game will be paused.\n")
+                # Wait for player to reconnect
+                if wait_for_player_reconnect(i):
+                    print(f"[DEBUG] a player reconnection detected in check_all_connections")
+                    # Player reconnected, resume game
+                    return False
+
             else:  # This is a spectator
                 # Remove spectator from list
                 all_connections.pop(i)
@@ -129,8 +167,17 @@ def check_all_connections(check_index=None):
         disconnected_indices.clear()
         print(f"[DEBUG] a player disconnection detected in check_all_connections")
         return True
-    print(f"[DEBUG] no player disconnection detected in check_all_connections")
+    print(f"[DEBUG] No disconnections detected in check_all_connections")
     return False
+
+def monitor_connections():
+    """Monitor all connections and check for disconnections."""
+    global all_connections, player_reconnecting
+    while True:
+        with connection_lock:
+            # Check all connections
+            check_all_connections()
+        time.sleep(1)  # Sleep for a short duration before checking again
 
 def handle_client(conn, addr):
     """Handle a client connection by adding it to the appropriate list."""
@@ -164,6 +211,8 @@ def handle_client(conn, addr):
                 if connection_num < MAX_PLAYERS:
                     safe_send(wfile, rfile, f"[INFO] Waiting for Player {MAX_PLAYERS} to connect...\n\n")
             else:
+                # add reconecting player to the list
+
                 safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
                 if game_in_progress:
                     safe_send(wfile, rfile, f"[INFO] Current game in progress. You will receive game updates.\n\n")
@@ -241,10 +290,17 @@ def start_game_countdown():
                     safe_send(wf, rf, f"[INFO] Game is starting! You are Player {num}.\n\n")
                 else:
                     safe_send(wf, rf, "[INFO] Game is starting!\n\n")
-        
-        # Start the game
-        run_multiplayer_game_online(all_connections)
-        
+
+        print(f"[DEBUG] monitor connections thread started")
+         # start check connections thread
+        check_connections_thread = threading.Thread(target=monitor_connections)
+        check_connections_thread.daemon = True
+        check_connections_thread.start()
+
+        run_multiplayer_game_online(player_reconnecting, all_connections)
+
+        print(f"[DEBUG] Game finished")
+
         # After game ends, notify all players
         with connection_lock:
             for _, _, rf, wf, num in all_connections:
