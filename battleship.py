@@ -152,6 +152,10 @@ class Board:
                 occupied.add((r, col))
         return occupied
 
+    def is_spot_hit(self, row, col):
+        """Check if a spot has already been hit or missed."""
+        return self.hidden_grid[row][col] in ['X', 'o']
+
     def fire_at(self, row, col):
         """
         Fire at (row, col). Return a tuple (result, sunk_ship_name).
@@ -380,8 +384,18 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                     input_data = recv_from_player(idx, timeout=0.1)  # Use small timeout to keep checking
                     if input_data is not None:
                         if idx == player_idx:
-                            # Current player's input
-                            return input_data
+                            try:
+                                result = parse_coordinate(input_data)
+                                row, col = result
+                                # Check if spot has already been hit before returning
+                                if boards[1 - player_idx].is_spot_hit(row, col):
+                                    send_to_player(player_idx, "[INFO] Invalid move. You've already fired at that location.")
+                                    continue
+                                return result
+                            except ValueError as e:
+                                send_to_player(current_player, f"Invalid coordinate: {e}")
+                                continue
+
                         else:
                             # Other player's input - warn them
                             if idx not in warned_players:
@@ -555,7 +569,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             send_board_to_player(current_player, boards[1 - current_player], False)
             
             # Send turn notification
-            send_to_player(current_player, f"\nIt's your turn to fire!\n Enter coordinate to fire at (e.g., B5):")
+            send_to_player(current_player, f"\n[INFO] It's your turn to fire!\n\n[INFO] Enter coordinate to fire at (e.g., B5):")
             send_to_player(1 - current_player, f"\nWaiting for Player {current_player + 1}'s move...")
             send_to_spectators(f"\nPlayer {current_player + 1}'s turn to fire...")
             send_to_spectators(f"\nPlayer Boards:\n")
@@ -573,11 +587,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                         continue
                     
                     # Process the coordinate
-                    try:
-                        row, col = parse_coordinate(coord_str)
-                    except ValueError as e:
-                        send_to_player(current_player, f"Invalid coordinate: {e}")
-                        continue
+                    row, col = coord_str
                     
                     result, sunk_name = boards[1 - current_player].fire_at(row, col)
                     

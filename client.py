@@ -43,6 +43,8 @@ def receive_messages(rfile, wfile):
                 if "It's your turn to fire!" in message:
                     is_my_turn = True
                     is_setup_phase = False  # Game has started
+                elif "Invalid" in message:
+                    is_my_turn = True
                 elif "Waiting for Player" in message:
                     is_my_turn = False
                 elif "All ships have been placed. Game is starting!" in message:
