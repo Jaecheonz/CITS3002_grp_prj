@@ -564,61 +564,60 @@ def run_multiplayer_game_online(all_connections):
             send_board_to_spectators(boards[1])
             
             # Get firing coordinate from current player
-            # while True:
-            #     try:
-            #         coord_str = handle_input_during_turn(current_player)
-            #         if coord_str is None:  # Timeout or disconnection
-            #             current_player = 1 - current_player  # Switch turns
-            #             continue
+            while True:
+                try:
+                    coord_str = handle_input_during_turn(current_player)
+                    if coord_str is None:  # Timeout or disconnection
+                        current_player = 1 - current_player  # Switch turns
+                        continue
                     
-            #         # Process the coordinate
-            #         try:
-            #             row, col = parse_coordinate(coord_str)
-            #         except ValueError as e:
-            #             send_to_player(current_player, f"Invalid coordinate: {e}")
-            #             continue
+                    # Process the coordinate
+                    try:
+                        row, col = parse_coordinate(coord_str)
+                    except ValueError as e:
+                        send_to_player(current_player, f"Invalid coordinate: {e}")
+                        continue
                     
-            #         result, sunk_name = boards[1 - current_player].fire_at(row, col)
+                    result, sunk_name = boards[1 - current_player].fire_at(row, col)
                     
-            #         # Update all players and spectators
-            #         if result == 'hit':
-            #             if sunk_name:
-            #                 send_to_player(current_player, f"HIT! You sank the {sunk_name}!")
-            #                 send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
-            #                 send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
-            #             else:
-            #                 send_to_player(current_player, "HIT!")
-            #                 send_to_player(1 - current_player, f"Your ship was hit at {coord_str}!")
-            #                 send_to_spectators(f"Player {current_player + 1} hit a ship at {coord_str}!")
+                    # Update all players and spectators
+                    if result == 'hit':
+                        if sunk_name:
+                            send_to_player(current_player, f"HIT! You sank the {sunk_name}!")
+                            send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
+                            send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
+                        else:
+                            send_to_player(current_player, "HIT!")
+                            send_to_player(1 - current_player, f"Your ship was hit at {coord_str}!")
+                            send_to_spectators(f"Player {current_player + 1} hit a ship at {coord_str}!")
                         
-            #             if boards[1 - current_player].all_ships_sunk():
-            #                 send_to_player(current_player, "Congratulations! You sank all ships!")
-            #                 send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
-            #                 send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
-            #                 return
-            #         elif result == 'miss':
-            #             send_to_player(current_player, "MISS!")
-            #             send_to_player(1 - current_player, f"Opponent fired at {coord_str} and missed.")
-            #             send_to_spectators(f"Player {current_player + 1} missed at {coord_str}!")
-            #         elif result == 'already_shot':
-            #             send_to_player(current_player, "You've already fired at that location.")
-            #             continue
+                        if boards[1 - current_player].all_ships_sunk():
+                            send_to_player(current_player, "Congratulations! You sank all ships!")
+                            send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
+                            send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
+                            return
+                    elif result == 'miss':
+                        send_to_player(current_player, "MISS!")
+                        send_to_player(1 - current_player, f"Opponent fired at {coord_str} and missed.")
+                        send_to_spectators(f"Player {current_player + 1} missed at {coord_str}!")
+                    elif result == 'already_shot':
+                        send_to_player(current_player, "You've already fired at that location.")
+                        continue
                     
-            #         # Update spectator boards after each move
-            #         send_to_spectators(f"\nPlayer 1's Board:\n")
-            #         send_board_to_spectators(boards[0])
-            #         send_to_spectators(f"\nPlayer 2's Board:\n")
-            #         send_board_to_spectators(boards[1])
+                    # Update spectator boards after each move
+                    send_to_spectators(f"\nPlayer 1's Board:\n")
+                    send_board_to_spectators(boards[0])
+                    send_to_spectators(f"\nPlayer 2's Board:\n")
+                    send_board_to_spectators(boards[1])
                     
-            #     except ValueError as e:
-            #         send_to_player(current_player, f"Invalid input: {e}")
-            #         continue
+                except ValueError as e:
+                    send_to_player(current_player, f"Invalid input: {e}")
+                    continue
                 
-            #     # Switch players
-            #     current_player = 1 - current_player
-            #     last_move_time = time.time()
-            #     break
-            return
+                # Switch players
+                current_player = 1 - current_player
+                last_move_time = time.time()
+                break
         except ConnectionResetError as e:
             # Player disconnected during gameplay
             send_to_player(1 - current_player, f"[INFO] {e}")
