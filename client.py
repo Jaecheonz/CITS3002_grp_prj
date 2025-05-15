@@ -16,12 +16,14 @@ INACTIVITY_TIMEOUT = 60  # 60 seconds timeout for inactivity
 MAX_RETRIES = 3  # Maximum number of retries for connection
 RETRY_DELAY = 2
 
-# Global flag for controlling the client loop
+# Global flags for controlling the client loop
 running = True
+is_my_turn = False  # Flag to track if it's this client's turn
+is_setup_phase = True  # Flag to track if we're in the ship placement phase
 
 def receive_messages(rfile, wfile):
     """Continuously receive and print messages from the server."""
-    global running
+    global running, is_my_turn, is_setup_phase
     try:
         while running:
             message = safe_recv(rfile, wfile)
@@ -37,6 +39,14 @@ def receive_messages(rfile, wfile):
                 print(message)
             else:
                 print(message)
+                # Update turn status based on server messages
+                if "It's your turn to fire!" in message:
+                    is_my_turn = True
+                    is_setup_phase = False  # Game has started
+                elif "Waiting for Player" in message:
+                    is_my_turn = False
+                elif "All ships have been placed. Game is starting!" in message:
+                    is_setup_phase = False
                 
     except ConnectionResetError:
         print("\n[ERROR] Connection to server was reset")
@@ -60,7 +70,7 @@ def get_user_input(prompt, timeout=INACTIVITY_TIMEOUT):
         return None
 
 def main():
-    global running
+    global running, is_my_turn, is_setup_phase
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -92,13 +102,23 @@ def main():
                 user_input = get_user_input(">> ")
                 if user_input is None:
                     continue
-                    
-                safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
                 
+                # Always process quit command regardless of phase or turn
                 if user_input.lower() == 'quit':
                     print("[INFO] You chose to quit.")
+                    safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
                     running = False
                     break
+                
+                # During setup phase, process all commands
+                if is_setup_phase:
+                    safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
+                # During gameplay, only process moves during player's turn
+                elif is_my_turn:
+                    safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
+                    is_my_turn = False  # Reset turn flag after sending move
+                else:
+                    print("[INFO] It's not your turn. Please wait for your turn to make a move.")
                     
         except KeyboardInterrupt:
             print("\n[INFO] Client exiting.")

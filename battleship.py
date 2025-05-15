@@ -567,7 +567,6 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             # Get firing coordinate from current player
             while True:
                 try:
-                    player_reconnecting.wait()
                     coord_str = handle_input_during_turn(current_player)
                     if coord_str is None:  # Timeout or disconnection
                         current_player = 1 - current_player  # Switch turns
