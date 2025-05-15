@@ -622,7 +622,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
         except ConnectionResetError as e:
             if not player_reconnecting.is_set():
                 # Player reconnected
-                send_to_player(current_player, f"[INFO] {e}")
+                send_to_player(1 - current_player, f"[INFO] {e}")
                 send_to_spectators(f"[INFO] {e}")
                 return
             else:
