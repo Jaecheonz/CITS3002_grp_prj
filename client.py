@@ -8,7 +8,6 @@ import sys
 import time
 import select
 from protocol import safe_send, safe_recv, PACKET_TYPES
-import logging
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -22,7 +21,6 @@ running = True
 is_my_turn = False  # Flag to track if it's this client's turn
 is_setup_phase = True  # Flag to track if we're in the ship placement phase
 
-logger = logging.getLogger(__name__)
 
 def receive_messages(rfile, wfile):
     """Continuously receive and print messages from the server."""
@@ -54,7 +52,6 @@ def receive_messages(rfile, wfile):
                     if not is_my_turn:  # Only change if we weren't already in our turn
                         is_my_turn = False
                 elif "Timer expired!" in message:
-                    logger.warning("Turn expired")
                     is_my_turn = False  # Turn was given up due to timeout
                 elif "All ships have been placed. Game is starting!" in message:
                     is_setup_phase = False
@@ -114,7 +111,7 @@ def main():
             
             # Main thread handles sending user input
             while running:
-                user_input = get_user_input(">> ")
+                user_input = get_user_input(">> please wait after input\n\n")
                 if user_input is None:
                     continue
                 

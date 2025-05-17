@@ -10,10 +10,13 @@ logger = logging.getLogger('protocol_errors')
 
 # Add file handler for errors and warnings
 error_handler = logging.FileHandler('protocol_errors.log')
-error_handler.setLevel(logging.WARNING)  # Handle WARNING and above
+error_handler.setLevel(logging.INFO)  # Changed from WARNING to INFO to include all levels
 error_formatter = logging.Formatter('%(levelname)s: %(message)s')
 error_handler.setFormatter(error_formatter)
 logger.addHandler(error_handler)
+
+# Set logger level to INFO to ensure all messages are captured
+logger.setLevel(logging.INFO)
 
 # Prevent propagation to root logger to avoid duplicate logs
 logger.propagate = False
@@ -130,12 +133,12 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         
         # For PLAYER_MOVE packets, we need to ensure we get an ACK before proceeding
         if packet_type == PACKET_TYPES['PLAYER_MOVE']:
-            logger.warning(f"Sending PLAYER_MOVE packet {packet.sequence_num}")
+            logger.info(f"Sending PLAYER_MOVE packet {packet.sequence_num}")
             wfile.write(packed_data)
             wfile.flush()
             # Wait for ACK with a longer timeout for moves
             if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
-                logger.warning(f"PLAYER_MOVE packet {packet.sequence_num} acknowledged")
+                logger.info(f"PLAYER_MOVE packet {packet.sequence_num} acknowledged")
                 time.sleep(0.05)  # Small delay after successful ACK
                 return True
             logger.warning(f"Failed to get ACK for PLAYER_MOVE packet {packet.sequence_num}")
@@ -143,12 +146,11 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         
         # For turn transition messages, we need to be extra careful
         if "It's your turn" in message or "Waiting for Player" in message:
-            logger.warning(f"Sending turn transition message: {message}")
             wfile.write(packed_data)
             wfile.flush()
             # Wait for ACK with a longer timeout for turn transitions
             if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
-                logger.warning(f"Turn transition message acknowledged")
+                logger.info(f"Turn transition message acknowledged")
                 time.sleep(0.1)  # Longer delay for turn transitions
                 return True
             logger.warning(f"Failed to get ACK for turn transition message")
@@ -160,16 +162,16 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         while True:
             try:
                 # Log packet details before sending
-                logger.warning(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes)")
+                logger.info(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes)")
                 
                 wfile.write(packed_data)
                 wfile.flush()
-                logger.warning(f"Successfully wrote packet {packet.sequence_num} to socket")
+                logger.info(f"Successfully wrote packet {packet.sequence_num} to socket")
                 
                 # Wait for ACK with a reasonable timeout
                 if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=0.5):
                     if attempt > 0:
-                        logger.warning(f"Packet {packet.sequence_num} successfully delivered after {attempt} retries")
+                        logger.info(f"Packet {packet.sequence_num} successfully delivered after {attempt} retries")
                     time.sleep(0.05)  # Small delay after successful ACK
                     return True
                     
@@ -260,14 +262,14 @@ def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
                         
                     try:
                         packet_type, ack_seq, _, payload_len = struct.unpack('!BBHH', header)
-                        logger.warning(f"Received packet - type: {packet_type}, seq: {ack_seq}, waiting for ACK of {sequence_num}")
+                        logger.info(f"Received packet - type: {packet_type}, seq: {ack_seq}, waiting for ACK of {sequence_num}")
                         
                         # For ACK packets, check if it matches our sequence
                         if packet_type == PACKET_TYPES['ACK']:
                             if (ack_seq % 256) == (sequence_num % 256):
-                                logger.warning(f"Received matching ACK for packet {sequence_num}")
+                                logger.info(f"Received matching ACK for packet {sequence_num}")
                                 return True
-                            logger.warning(f"Received ACK for sequence {ack_seq}, waiting for {sequence_num}")
+                            logger.info(f"Received ACK for sequence {ack_seq}, waiting for {sequence_num}")
                             continue  # Keep waiting for our ACK
                         
                         # For non-ACK packets, read the payload and process it
@@ -295,7 +297,7 @@ def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
                                 continue
                             
                             # For other packet types, just log and continue
-                            logger.warning(f"Received non-ACK packet of type {packet_type} with {len(payload)} bytes")
+                            logger.info(f"Received non-ACK packet of type {packet_type} with {len(payload)} bytes")
                             continue
                     except struct.error as e:
                         logger.warning(f"Failed to unpack header while waiting for ACK of packet {sequence_num}: {str(e)}")
