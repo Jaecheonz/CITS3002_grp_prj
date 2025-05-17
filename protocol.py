@@ -126,11 +126,11 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
             payload = message.encode('utf-8')
         else:
             payload = message
-            
+
         # Create and send packet
         packet = Packet(packet_type, next_sequence_num(), payload)
         packed_data = packet.pack()
-        
+
         # For PLAYER_MOVE packets, we need to ensure we get an ACK before proceeding
         if packet_type == PACKET_TYPES['PLAYER_MOVE']:
             logger.info(f"Sending PLAYER_MOVE packet {packet.sequence_num}")
@@ -143,9 +143,9 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
                 return True
             logger.warning(f"Failed to get ACK for PLAYER_MOVE packet {packet.sequence_num}")
             return False
-        
+
         # For turn transition messages, we need to be extra careful
-        if "It's your turn" in message or "Waiting for Player" in message:
+        if isinstance(message, str) and ("It's your turn" in message or "Waiting for Player" in message):
             wfile.write(packed_data)
             wfile.flush()
             # Wait for ACK with a longer timeout for turn transitions
@@ -155,40 +155,41 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
                 return True
             logger.warning(f"Failed to get ACK for turn transition message")
             return False
-        
-        # For all other packets, keep trying until we succeed
+
+        # For all other packets, retry up to MAX_RETRIES
         attempt = 0
         last_error = None
-        while True:
+        while attempt < MAX_RETRIES:
             try:
-                # Log packet details before sending
-                logger.info(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes)")
-                
+                logger.info(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes), attempt {attempt+1}")
                 wfile.write(packed_data)
                 wfile.flush()
                 logger.info(f"Successfully wrote packet {packet.sequence_num} to socket")
-                
+
                 # Wait for ACK with a reasonable timeout
                 if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=0.5):
                     if attempt > 0:
                         logger.info(f"Packet {packet.sequence_num} successfully delivered after {attempt} retries")
                     time.sleep(0.05)  # Small delay after successful ACK
                     return True
-                    
+
                 # Log retransmission and continue trying
                 attempt += 1
-                if attempt % 10 == 0:  # Log every 10 attempts
-                    logger.warning(f"Retransmission attempt {attempt} for packet {packet.sequence_num} - No ACK received")
-                    if last_error:
-                        logger.warning(f"Last error encountered: {last_error}")
+                logger.warning(f"Retransmission attempt {attempt} for packet {packet.sequence_num} - No ACK received")
+                if last_error:
+                    logger.warning(f"Last error encountered: {last_error}")
                 time.sleep(RETRY_DELAY)
-                
+
             except Exception as e:
                 last_error = str(e)
                 logger.error(f"Error during send attempt {attempt + 1} for packet {packet.sequence_num}: {str(e)}")
+                attempt += 1
                 time.sleep(RETRY_DELAY)
                 continue
-            
+
+        logger.error(f"Failed to receive ACK for packet {packet.sequence_num} after {MAX_RETRIES} attempts")
+        return False
+
     except Exception as e:
         logger.error(f"Fatal error sending packet: {str(e)}")
         return False
