@@ -111,7 +111,7 @@ def main():
             
             # Main thread handles sending user input
             while running:
-                user_input = get_user_input(">> please wait after input, result message may very rarely be corrupted ;)\n\n>> (it wont come in that case T_T but dont disconnect because your move is valid!)\n\n>> you can see it on your opponent's board in your next turn\n\n")
+                user_input = get_user_input(">> please wait after input, result message may very rarely be corrupted ;)\n>> it wont come in that case T_T but dont disconnect because your move is valid!\n>> you can see it on your opponent's board in your next turn\n\n")
                 if user_input is None:
                     continue
                 
