@@ -31,7 +31,8 @@ PACKET_TYPES = {
     'CHAT_MESSAGE': 4,
     'SYSTEM_MESSAGE': 5,
     'RETRANSMISSION_REQUEST': 6,
-    'ACK': 7
+    'ACK': 7,
+    'GAME_STATE': 8  # New packet type for critical game state messages
 }
 
 # Sequence number generator
@@ -88,7 +89,7 @@ class Packet:
                 
             # Unpack header
             header = struct.unpack('!BBHH', data[:6])
-            packet_type, sequence_num, checksum, payload_len = header
+            packet_type, sequence_num, received_checksum, payload_len = header
             
             # Verify payload length
             if len(data) < 6 + payload_len:
@@ -102,8 +103,8 @@ class Packet:
             temp_packet = cls(packet_type, sequence_num, payload)
             
             # Verify checksum
-            if temp_packet.checksum != checksum:
-                logger.warning(f"Checksum mismatch for packet {sequence_num}. Expected {checksum}, got {temp_packet.checksum}")
+            if temp_packet.checksum != received_checksum:
+                logger.warning(f"Checksum mismatch for packet {sequence_num}. Expected {received_checksum}, got {temp_packet.checksum}")
                 return None
             
             return temp_packet
@@ -127,28 +128,67 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         packet = Packet(packet_type, next_sequence_num(), payload)
         packed_data = packet.pack()
         
-        # For critical messages (like board updates), use immediate delivery
-        if packet_type in [PACKET_TYPES['BOARD_UPDATE'], PACKET_TYPES['GAME_UPDATE']]:
+        # For PLAYER_MOVE packets, we need to ensure we get an ACK before proceeding
+        if packet_type == PACKET_TYPES['PLAYER_MOVE']:
+            logger.warning(f"Sending PLAYER_MOVE packet {packet.sequence_num}")
             wfile.write(packed_data)
             wfile.flush()
-            return True
-        
-        # Try to send with retries
-        for attempt in range(MAX_RETRIES):
-            wfile.write(packed_data)
-            wfile.flush()
-            
-            # Wait for ACK with a shorter timeout
-            if wait_for_ack(rfile, packet.sequence_num, timeout=0.2):  # Reduced from 0.5 to 0.2
+            # Wait for ACK with a longer timeout for moves
+            if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
+                logger.warning(f"PLAYER_MOVE packet {packet.sequence_num} acknowledged")
+                time.sleep(0.05)  # Small delay after successful ACK
                 return True
+            logger.warning(f"Failed to get ACK for PLAYER_MOVE packet {packet.sequence_num}")
+            return False
+        
+        # For turn transition messages, we need to be extra careful
+        if "It's your turn" in message or "Waiting for Player" in message:
+            logger.warning(f"Sending turn transition message: {message}")
+            wfile.write(packed_data)
+            wfile.flush()
+            # Wait for ACK with a longer timeout for turn transitions
+            if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
+                logger.warning(f"Turn transition message acknowledged")
+                time.sleep(0.1)  # Longer delay for turn transitions
+                return True
+            logger.warning(f"Failed to get ACK for turn transition message")
+            return False
+        
+        # For all other packets, keep trying until we succeed
+        attempt = 0
+        last_error = None
+        while True:
+            try:
+                # Log packet details before sending
+                logger.warning(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes)")
                 
-            logger.warning(f"Retransmission attempt {attempt + 1} for packet {packet.sequence_num}")
-            time.sleep(RETRY_DELAY)
+                wfile.write(packed_data)
+                wfile.flush()
+                logger.warning(f"Successfully wrote packet {packet.sequence_num} to socket")
+                
+                # Wait for ACK with a reasonable timeout
+                if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=0.5):
+                    if attempt > 0:
+                        logger.warning(f"Packet {packet.sequence_num} successfully delivered after {attempt} retries")
+                    time.sleep(0.05)  # Small delay after successful ACK
+                    return True
+                    
+                # Log retransmission and continue trying
+                attempt += 1
+                if attempt % 10 == 0:  # Log every 10 attempts
+                    logger.warning(f"Retransmission attempt {attempt} for packet {packet.sequence_num} - No ACK received")
+                    if last_error:
+                        logger.warning(f"Last error encountered: {last_error}")
+                time.sleep(RETRY_DELAY)
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"Error during send attempt {attempt + 1} for packet {packet.sequence_num}: {str(e)}")
+                time.sleep(RETRY_DELAY)
+                continue
             
-        logger.error(f"Failed to send packet {packet.sequence_num} after {MAX_RETRIES} attempts")
-        return False
     except Exception as e:
-        logger.error(f"Error sending packet: {str(e)}")
+        logger.error(f"Fatal error sending packet: {str(e)}")
         return False
 
 def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
@@ -167,12 +207,16 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
             
         # Unpack header to get payload length
         try:
-            packet_type, sequence_num, checksum, payload_len = struct.unpack('!BBHH', header)
+            packet_type, sequence_num, received_checksum, payload_len = struct.unpack('!BBHH', header)
         except struct.error as e:
             logger.error(f"Failed to unpack header during packet reception: {str(e)}")
             return None
         
-        # Read payload
+        # For ACK packets, we know they have no payload
+        if packet_type == PACKET_TYPES['ACK']:
+            return None
+            
+        # Read payload for non-ACK packets
         payload = rfile.read(payload_len)
         if not payload or len(payload) < payload_len:
             logger.warning(f"Received incomplete payload. Expected {payload_len} bytes but got {len(payload) if payload else 0}")
@@ -181,13 +225,14 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
         # Combine header and payload for unpacking
         packet = Packet.unpack(header + payload)
         if packet is None:
-            # Request retransmission
-            logger.warning("Requesting retransmission due to packet validation failure")
-            request_retransmission(wfile)
+            # Only request retransmission for non-ACK packets
+            if packet_type != PACKET_TYPES['ACK']:
+                logger.warning("Requesting retransmission due to packet validation failure")
+                request_retransmission(wfile)
             return None
             
-        # Send ACK for non-critical messages
-        if packet.packet_type not in [PACKET_TYPES['BOARD_UPDATE'], PACKET_TYPES['GAME_UPDATE']]:
+        # Send ACK for all non-ACK packets
+        if packet.packet_type != PACKET_TYPES['ACK']:
             send_ack(wfile, packet.sequence_num)
         
         # Don't process ACK packets as messages
@@ -199,26 +244,66 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
         logger.error(f"Error receiving packet: {str(e)}")
         return None
 
-def wait_for_ack(rfile, sequence_num, timeout=0.2):  # Reduced from 1.0 to 0.2
+def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
     """Wait for an acknowledgment packet."""
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            readable, _, _ = select.select([rfile.fileno()], [], [], 0.05)  # Reduced from 0.1 to 0.05
+            readable, _, _ = select.select([rfile.fileno()], [], [], 0.1)
             if readable:
-                header = rfile.read(6)  # Changed from 9 to 6
-                if not header:
-                    continue
-                    
-                try:
-                    packet_type, ack_seq, _, _ = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
-                    if packet_type == PACKET_TYPES['ACK'] and ack_seq == sequence_num:
-                        return True
-                except struct.error:
-                    continue
+                # Read and process all available packets
+                while True:
+                    header = rfile.read(6)
+                    if not header:
+                        logger.warning(f"No header received while waiting for ACK of packet {sequence_num} - Connection may be closed")
+                        return False
+                        
+                    try:
+                        packet_type, ack_seq, _, payload_len = struct.unpack('!BBHH', header)
+                        logger.warning(f"Received packet - type: {packet_type}, seq: {ack_seq}, waiting for ACK of {sequence_num}")
+                        
+                        # For ACK packets, check if it matches our sequence
+                        if packet_type == PACKET_TYPES['ACK']:
+                            if (ack_seq % 256) == (sequence_num % 256):
+                                logger.warning(f"Received matching ACK for packet {sequence_num}")
+                                return True
+                            logger.warning(f"Received ACK for sequence {ack_seq}, waiting for {sequence_num}")
+                            continue  # Keep waiting for our ACK
+                        
+                        # For non-ACK packets, read the payload and process it
+                        if payload_len > 0:
+                            payload = rfile.read(payload_len)
+                            if not payload:
+                                logger.warning(f"Failed to read payload of {payload_len} bytes - Connection may be closed")
+                                return False
+                            
+                            # Send ACK for any non-ACK packet we receive
+                            send_ack(wfile, ack_seq)
+                            
+                            # For critical packets like GAME_STATE, we should not wait indefinitely
+                            if packet_type == PACKET_TYPES['GAME_STATE']:
+                                logger.warning(f"Received critical GAME_STATE packet while waiting for ACK of {sequence_num}")
+                                # If we've waited more than half the timeout, return False to allow retransmission
+                                if time.time() - start_time > timeout / 2:
+                                    logger.warning(f"Timeout threshold reached while waiting for ACK of {sequence_num}")
+                                    return False
+                            
+                            # For PLAYER_MOVE packets, we should be more lenient
+                            if packet_type == PACKET_TYPES['PLAYER_MOVE']:
+                                logger.warning(f"Received PLAYER_MOVE packet while waiting for ACK of {sequence_num}")
+                                # Continue waiting for our original ACK
+                                continue
+                            
+                            # For other packet types, just log and continue
+                            logger.warning(f"Received non-ACK packet of type {packet_type} with {len(payload)} bytes")
+                            continue
+                    except struct.error as e:
+                        logger.warning(f"Failed to unpack header while waiting for ACK of packet {sequence_num}: {str(e)}")
+                        break
         except Exception as e:
-            logger.error(f"Error waiting for ACK: {str(e)}")
+            logger.error(f"Error waiting for ACK of packet {sequence_num}: {str(e)}")
             continue
+    logger.warning(f"Timeout waiting for ACK of packet {sequence_num}")
     return False
 
 def send_ack(wfile, sequence_num):

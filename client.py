@@ -8,6 +8,7 @@ import sys
 import time
 import select
 from protocol import safe_send, safe_recv, PACKET_TYPES
+import logging
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -20,6 +21,8 @@ RETRY_DELAY = 2
 running = True
 is_my_turn = False  # Flag to track if it's this client's turn
 is_setup_phase = True  # Flag to track if we're in the ship placement phase
+
+logger = logging.getLogger(__name__)
 
 def receive_messages(rfile, wfile):
     """Continuously receive and print messages from the server."""
@@ -43,12 +46,22 @@ def receive_messages(rfile, wfile):
                 if "It's your turn to fire!" in message:
                     is_my_turn = True
                     is_setup_phase = False  # Game has started
-                elif "Invalid" in message:
+                elif "Invalid" in message or "Invalid coordinate" in message:
+                    # Keep turn if move was invalid
                     is_my_turn = True
                 elif "Waiting for Player" in message:
-                    is_my_turn = False
+                    # Only change turn state if we haven't just had an invalid move
+                    if not is_my_turn:  # Only change if we weren't already in our turn
+                        is_my_turn = False
+                elif "Timer expired!" in message:
+                    logger.warning("Turn expired")
+                    is_my_turn = False  # Turn was given up due to timeout
                 elif "All ships have been placed. Game is starting!" in message:
                     is_setup_phase = False
+                elif "HIT!" in message or "MISS!" in message:
+                    # Only end turn if it was a valid move
+                    if not ("Invalid" in message or "Invalid coordinate" in message):
+                        is_my_turn = False  # Turn is over after a valid move
                 
     except ConnectionResetError:
         print("\n[ERROR] Connection to server was reset")
@@ -115,12 +128,14 @@ def main():
                 # During setup phase, process all commands
                 if is_setup_phase:
                     safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
+                    time.sleep(0.1)
                 # During gameplay, only process moves during player's turn
                 elif is_my_turn:
                     safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
-                    is_my_turn = False  # Reset turn flag after sending move
+                    time.sleep(0.1)
                 else:
                     print("[INFO] It's not your turn. Please wait for your turn to make a move.")
+                    time.sleep(0.1)
                     
         except KeyboardInterrupt:
             print("\n[INFO] Client exiting.")
