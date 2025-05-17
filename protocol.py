@@ -1,5 +1,4 @@
 import struct
-import zlib
 import select
 import threading
 import logging
@@ -21,8 +20,8 @@ logger.propagate = False
 
 # Constants
 INACTIVITY_TIMEOUT = 30  # Default timeout, can be overridden
-MAX_RETRIES = 3
-RETRY_DELAY = 0.1  # 100ms delay between retries
+MAX_RETRIES = 2  # Reduced from 3 to 2
+RETRY_DELAY = 0.05  # Reduced from 0.1 to 0.05
 
 # Packet types
 PACKET_TYPES = {
@@ -31,8 +30,8 @@ PACKET_TYPES = {
     'BOARD_UPDATE': 3,
     'CHAT_MESSAGE': 4,
     'SYSTEM_MESSAGE': 5,
-    'RETRANSMISSION_REQUEST': 6,  # New packet type for retransmission requests
-    'ACK': 7  # New packet type for acknowledgments
+    'RETRANSMISSION_REQUEST': 6,
+    'ACK': 7
 }
 
 # Sequence number generator
@@ -55,27 +54,27 @@ class Packet:
         self.timestamp = datetime.now()
     
     def _calculate_checksum(self):
-        # Simple CRC32 over the packet data
-        # Format: [type(1B)][seq(1B)][payload_len(2B)][padding(1B)][payload]
-        header = struct.pack('!BBHB',
+        """Calculate a simple sum-based checksum."""
+        # Format: [type(1B)][seq(1B)][payload_len(2B)][payload]
+        header = struct.pack('!BBH',
             self.packet_type,
             self.sequence_num,
-            len(self.payload),
-            0  # Padding byte
+            len(self.payload)
         )
         
-        # Calculate CRC32 over header + payload
-        return zlib.crc32(header + self.payload)
+        # Calculate sum of all bytes
+        total = sum(header + self.payload)
+        # Take modulo 65536 to keep checksum to 2 bytes
+        return total % 65536
     
     def pack(self):
         # Pack the packet into a binary format
-        # Format: [type(1B)][seq(1B)][checksum(4B)][payload_len(2B)][padding(1B)][payload]
-        header = struct.pack('!BBLHB',
+        # Format: [type(1B)][seq(1B)][checksum(2B)][payload_len(2B)][payload]
+        header = struct.pack('!BBHH',
             self.packet_type,
             self.sequence_num,
             self.checksum,
-            len(self.payload),
-            0  # Padding byte
+            len(self.payload)
         )
         return header + self.payload
     
@@ -83,21 +82,21 @@ class Packet:
     def unpack(cls, data):
         try:
             # Verify minimum packet length
-            if len(data) < 9:
+            if len(data) < 6:  # 6 bytes for header (type, seq, checksum, payload_len)
                 logger.warning("Packet too short for valid checksum verification")
                 return None
                 
             # Unpack header
-            header = struct.unpack('!BBLHB', data[:9])
-            packet_type, sequence_num, checksum, payload_len, _ = header
+            header = struct.unpack('!BBHH', data[:6])
+            packet_type, sequence_num, checksum, payload_len = header
             
             # Verify payload length
-            if len(data) < 9 + payload_len:
-                logger.warning(f"Packet payload length mismatch. Expected {payload_len} bytes but got {len(data) - 9}")
+            if len(data) < 6 + payload_len:
+                logger.warning(f"Packet payload length mismatch. Expected {payload_len} bytes but got {len(data) - 6}")
                 return None
             
             # Extract payload
-            payload = data[9:9+payload_len]
+            payload = data[6:6+payload_len]
             
             # Create temporary packet for checksum verification
             temp_packet = cls(packet_type, sequence_num, payload)
@@ -128,7 +127,7 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         packet = Packet(packet_type, next_sequence_num(), payload)
         packed_data = packet.pack()
         
-        # For critical messages (like board updates and waiting messages), use immediate delivery
+        # For critical messages (like board updates), use immediate delivery
         if packet_type in [PACKET_TYPES['BOARD_UPDATE'], PACKET_TYPES['GAME_UPDATE']]:
             wfile.write(packed_data)
             wfile.flush()
@@ -140,7 +139,7 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
             wfile.flush()
             
             # Wait for ACK with a shorter timeout
-            if wait_for_ack(rfile, packet.sequence_num, timeout=0.5):
+            if wait_for_ack(rfile, packet.sequence_num, timeout=0.2):  # Reduced from 0.5 to 0.2
                 return True
                 
             logger.warning(f"Retransmission attempt {attempt + 1} for packet {packet.sequence_num}")
@@ -160,15 +159,15 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
         if not readable:
             return None  # Timeout occurred
             
-        # Read header first (9 bytes)
-        header = rfile.read(9)
-        if not header or len(header) < 9:
+        # Read header first (6 bytes)
+        header = rfile.read(6)
+        if not header or len(header) < 6:
             logger.warning("Received incomplete header during packet reception")
             return None
             
         # Unpack header to get payload length
         try:
-            packet_type, sequence_num, checksum, payload_len, _ = struct.unpack('!BBLHB', header)
+            packet_type, sequence_num, checksum, payload_len = struct.unpack('!BBHH', header)
         except struct.error as e:
             logger.error(f"Failed to unpack header during packet reception: {str(e)}")
             return None
@@ -200,19 +199,19 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
         logger.error(f"Error receiving packet: {str(e)}")
         return None
 
-def wait_for_ack(rfile, sequence_num, timeout=1.0):
+def wait_for_ack(rfile, sequence_num, timeout=0.2):  # Reduced from 1.0 to 0.2
     """Wait for an acknowledgment packet."""
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            readable, _, _ = select.select([rfile.fileno()], [], [], 0.1)
+            readable, _, _ = select.select([rfile.fileno()], [], [], 0.05)  # Reduced from 0.1 to 0.05
             if readable:
-                header = rfile.read(9)
+                header = rfile.read(6)  # Changed from 9 to 6
                 if not header:
                     continue
                     
                 try:
-                    packet_type, ack_seq, _, _, _ = struct.unpack('!BBLHB', header)
+                    packet_type, ack_seq, _, _ = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                     if packet_type == PACKET_TYPES['ACK'] and ack_seq == sequence_num:
                         return True
                 except struct.error:
@@ -239,3 +238,4 @@ def request_retransmission(wfile):
         wfile.flush()
     except Exception as e:
         logger.error(f"Error requesting retransmission: {str(e)}")
+

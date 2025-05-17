@@ -40,7 +40,7 @@ def inject_errors(data, error_rate=0.1):
     result = bytearray(data)
     
     # Only inject errors in the payload portion
-    for i in range(9, len(result)):  # Skip header (first 9 bytes)
+    for i in range(6, len(result)):  # Skip header (first 6 bytes)
         if random.random() < error_rate:
             # Flip a single bit
             bit_to_flip = 1 << random.randint(0, 7)
@@ -108,11 +108,11 @@ def test_sequence_validation():
         try:
             while True:
                 # Read the packet
-                header = rfile2.read(9)
+                header = rfile2.read(6)  # Changed from 9 to 6
                 if not header:
                     break
                     
-                packet_type, seq_num, checksum, payload_len, _ = struct.unpack('!BBLHB', header)
+                packet_type, seq_num, checksum, payload_len = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                 payload = rfile2.read(payload_len)
                 
                 # Send ACK immediately
@@ -149,9 +149,9 @@ def test_sequence_validation():
             try:
                 readable, _, _ = select.select([rfile1.fileno()], [], [], 0.1)
                 if readable:
-                    header = rfile1.read(9)
+                    header = rfile1.read(6)  # Changed from 9 to 6
                     if header:
-                        packet_type, ack_seq, _, _, _ = struct.unpack('!BBLHB', header)
+                        packet_type, ack_seq, _, _ = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                         if packet_type == protocol.PACKET_TYPES['ACK'] and ack_seq == packet.sequence_num:
                             # Track the sequence in which packets were received
                             received_sequence.append(packet.sequence_num)
@@ -197,10 +197,10 @@ def test_retransmission():
     def ack_handler():
         try:
             # Read the packet
-            header = rfile2.read(9)
+            header = rfile2.read(6)  # Changed from 9 to 6
             if header:
                 # Get payload length from header
-                packet_type, seq_num, checksum, payload_len, _ = struct.unpack('!BBLHB', header)
+                packet_type, seq_num, checksum, payload_len = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                 # Read the payload
                 payload = rfile2.read(payload_len)
                 # Don't send ACK to test retransmission
@@ -228,9 +228,9 @@ def test_retransmission():
         try:
             readable, _, _ = select.select([rfile2.fileno()], [], [], 0.1)
             if readable:
-                header = rfile2.read(9)
+                header = rfile2.read(6)  # Changed from 9 to 6
                 if header:
-                    packet_type, seq_num, checksum, payload_len, _ = struct.unpack('!BBLHB', header)
+                    packet_type, seq_num, checksum, payload_len = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                     # Read the payload
                     payload = rfile2.read(payload_len)
                     if packet_type == protocol.PACKET_TYPES['SYSTEM_MESSAGE']:
@@ -277,10 +277,10 @@ def test_ack():
         
         # Read packet and send ACK
         try:
-            header = rfile2.read(9)
+            header = rfile2.read(6)  # Changed from 9 to 6
             if header:
                 # Send ACK
-                packet_type, seq_num, _, _, _ = struct.unpack('!BBLHB', header)
+                packet_type, seq_num, checksum, payload_len = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
                 ack_packet = protocol.Packet(protocol.PACKET_TYPES['ACK'], seq_num, b'')
                 wfile2.write(ack_packet.pack())
                 wfile2.flush()
@@ -290,9 +290,9 @@ def test_ack():
                 while time.time() - start_time < 1.0:  # 1 second timeout
                     readable, _, _ = select.select([rfile1.fileno()], [], [], 0.1)
                     if readable:
-                        ack_header = rfile1.read(9)
+                        ack_header = rfile1.read(6)  # Changed from 9 to 6
                         if ack_header:
-                            ack_type, ack_seq, _, _, _ = struct.unpack('!BBLHB', ack_header)
+                            ack_type, ack_seq, _, _ = struct.unpack('!BBHH', ack_header)  # Changed from BBLHB to BBHH
                             if ack_type == protocol.PACKET_TYPES['ACK'] and ack_seq == seq_num:
                                 ack_received += 1
                                 break
