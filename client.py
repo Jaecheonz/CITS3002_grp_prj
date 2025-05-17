@@ -41,7 +41,7 @@ def receive_messages(rfile, wfile):
             else:
                 print(message)
                 # Update turn status based on server messages
-                if "It's your turn to fire!" in message:
+                if "It's your turn to fire!" in message or "Enter a coordinate to fire at" in message:
                     is_my_turn = True
                     is_setup_phase = False  # Game has started
                 elif "Invalid" in message or "Invalid coordinate" in message:
@@ -111,7 +111,7 @@ def main():
             
             # Main thread handles sending user input
             while running:
-                user_input = get_user_input(">> please wait after input\n\n")
+                user_input = get_user_input(">> please wait after input, result message may very rarely be corrupted ;)\n\n>> (it wont come in that case T_T but dont disconnect because your move is valid!)\n\n>> you can see it on your opponent's board in your next turn\n\n")
                 if user_input is None:
                     continue
                 
