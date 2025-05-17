@@ -140,12 +140,23 @@ def check_all_connections(check_index=None):
             try:
                 conn, addr, rfile, wfile, num = all_connections[i]
                 print(f"[DEBUG] Checking connection {num} at index {i}")
-                readable, _, _ = select.select([rfile.fileno()], [], [], 0)
+                
+                # Use select with a very short timeout to check if socket is readable
+                readable, _, _ = select.select([conn], [], [], 0)
                 if readable:
-                    line = rfile.readline()
-                    if not line:  # Connection disconnected
-                        print(f"[DEBUG] Connection {num} at index {i} is disconnected (empty line)")
-                        raise ConnectionResetError()
+                    try:
+                        # Try to peek at the socket without consuming data
+                        data = conn.recv(1, socket.MSG_PEEK)
+                        if not data:  # Empty data means connection closed
+                            print(f"[DEBUG] Connection {num} at index {i} is disconnected (empty data)")
+                            raise ConnectionResetError()
+                    except BlockingIOError:
+                        # Socket would block - this is normal for non-blocking sockets
+                        # and doesn't indicate a disconnection
+                        pass
+                    except (ConnectionResetError, OSError) as e:
+                        print(f"[DEBUG] Exception caught for connection {num} at index {i}: {str(e)}")
+                        disconnected_indices.append((i, num))
             except (ConnectionResetError, OSError) as e:
                 print(f"[DEBUG] Exception caught for connection {num} at index {i}: {str(e)}")
                 disconnected_indices.append((i, num))
@@ -229,27 +240,27 @@ def handle_client(conn, addr):
 
             # Determine if they're an active player or spectator
             if connection_num <= MAX_PLAYERS and not game_in_progress:
-                safe_send(wfile, rfile, f"[INFO] Welcome! You are Player {connection_num}.\n\n")
+                safe_send(wfile, rfile, f"[INFO] Welcome! You are Player {connection_num}.\n")
                 if connection_num < MAX_PLAYERS:
-                    safe_send(wfile, rfile, f"[INFO] Waiting for Player {MAX_PLAYERS} to connect...\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Waiting for opponent to connect...\n")
             else:
                 if game_in_progress and not player_reconnecting.is_set():
                     # If game is in progress and player reconnects
-                    safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {connection_num}.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {connection_num}.\n")
                     player_reconnecting.set()
                 else:
-                    safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Welcome! You are Spectator {connection_num - MAX_PLAYERS}.\n")
                 if game_in_progress:
-                    safe_send(wfile, rfile, f"[INFO] Current game in progress. You will receive game updates.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Current game in progress. You will receive game updates.\n")
                 else:
-                    safe_send(wfile, rfile, f"[INFO] Waiting for game to start. You will be notified when it begins.\n\n")
+                    safe_send(wfile, rfile, f"[INFO] Waiting for game to start. You will be notified when it begins.\n")
             
             safe_send(wfile, rfile, "[TIP] Type 'quit' to exit.\n\n")
             
             # Notify all connected clients
             for c, _, rf, wf, _ in all_connections:
                 if c != conn:
-                    safe_send(wf, rf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n\n")
+                    safe_send(wf, rf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n")
             
             # Check if ready to start countdown
             if len(get_active_players()) == MAX_PLAYERS and not game_in_progress:
@@ -257,7 +268,7 @@ def handle_client(conn, addr):
                     if not countdown_timer_running:
                         countdown_timer_running = True
                         for _, _, rf, wf, _ in all_connections:
-                            safe_send(wf, rf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n\n")
+                            safe_send(wf, rf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n")
                         
                         # Start countdown thread
                         start_timer_thread = threading.Thread(target=start_game_countdown)
@@ -317,7 +328,7 @@ def start_game_countdown():
                     safe_send(wf, rf, "[INFO] Game is starting!\n\n")
 
         print(f"[DEBUG] monitor connections thread started")
-         # start check connections thread
+        # start check connections thread
         check_connections_thread = threading.Thread(target=monitor_connections)
         check_connections_thread.daemon = True
         check_connections_thread.start()

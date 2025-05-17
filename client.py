@@ -21,6 +21,7 @@ running = True
 is_my_turn = False  # Flag to track if it's this client's turn
 is_setup_phase = True  # Flag to track if we're in the ship placement phase
 
+
 def receive_messages(rfile, wfile):
     """Continuously receive and print messages from the server."""
     global running, is_my_turn, is_setup_phase
@@ -40,15 +41,24 @@ def receive_messages(rfile, wfile):
             else:
                 print(message)
                 # Update turn status based on server messages
-                if "It's your turn to fire!" in message:
+                if "It's your turn to fire!" in message or "Enter a coordinate to fire at" in message:
                     is_my_turn = True
                     is_setup_phase = False  # Game has started
-                elif "Invalid" in message:
+                elif "Invalid" in message or "Invalid coordinate" in message:
+                    # Keep turn if move was invalid
                     is_my_turn = True
                 elif "Waiting for Player" in message:
-                    is_my_turn = False
+                    # Only change turn state if we haven't just had an invalid move
+                    if not is_my_turn:  # Only change if we weren't already in our turn
+                        is_my_turn = False
+                elif "Timer expired!" in message:
+                    is_my_turn = False  # Turn was given up due to timeout
                 elif "All ships have been placed. Game is starting!" in message:
                     is_setup_phase = False
+                elif "HIT!" in message or "MISS!" in message:
+                    # Only end turn if it was a valid move
+                    if not ("Invalid" in message or "Invalid coordinate" in message):
+                        is_my_turn = False  # Turn is over after a valid move
                 
     except ConnectionResetError:
         print("\n[ERROR] Connection to server was reset")
@@ -101,7 +111,7 @@ def main():
             
             # Main thread handles sending user input
             while running:
-                user_input = get_user_input(">> ")
+                user_input = get_user_input(">> please wait after input, result message may very rarely be corrupted ;)\n\n>> (it wont come in that case T_T but dont disconnect because your move is valid!)\n\n>> you can see it on your opponent's board in your next turn\n\n")
                 if user_input is None:
                     continue
                 
@@ -115,12 +125,14 @@ def main():
                 # During setup phase, process all commands
                 if is_setup_phase:
                     safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
+                    time.sleep(0.1)
                 # During gameplay, only process moves during player's turn
                 elif is_my_turn:
                     safe_send(wfile, rfile, user_input, PACKET_TYPES['PLAYER_MOVE'])
-                    is_my_turn = False  # Reset turn flag after sending move
+                    time.sleep(0.1)
                 else:
                     print("[INFO] It's not your turn. Please wait for your turn to make a move.")
+                    time.sleep(0.1)
                     
         except KeyboardInterrupt:
             print("\n[INFO] Client exiting.")

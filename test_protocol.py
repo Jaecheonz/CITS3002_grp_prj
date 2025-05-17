@@ -152,14 +152,14 @@ def test_sequence_validation():
                     header = rfile1.read(6)  # Changed from 9 to 6
                     if header:
                         packet_type, ack_seq, _, _ = struct.unpack('!BBHH', header)  # Changed from BBLHB to BBHH
-                        if packet_type == protocol.PACKET_TYPES['ACK'] and ack_seq == packet.sequence_num:
+                        if packet_type == protocol.PACKET_TYPES['ACK'] and (ack_seq % 256) == (packet.sequence_num % 256):
                             # Track the sequence in which packets were received
                             received_sequence.append(packet.sequence_num)
                             
                             # Handle the packet based on its sequence number
-                            if packet.sequence_num == expected_sequence:
+                            if (packet.sequence_num % 256) == (expected_sequence % 256):
                                 received.append(packet.payload.decode('utf-8'))
-                                expected_sequence += 1
+                                expected_sequence = (packet.sequence_num + 1) % 256
                                 process_buffered_packets()
                             else:
                                 buffered_packets[packet.sequence_num] = packet
