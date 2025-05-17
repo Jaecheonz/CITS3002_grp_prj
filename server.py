@@ -78,6 +78,24 @@ def handle_p1_quit(conn):
     except:
         pass
 
+def reconnect_player(conn, addr):
+    """replace the disconnected player with a new connection."""
+    global all_connections, player_reconnecting
+    with connection_lock:
+        # Find the first available slot for the new connection
+        for i in range(len(all_connections)):
+            if all_connections[i] is None:
+                all_connections[i] = (conn, addr, conn.makefile('rb'), conn.makefile('wb'), i + 1)
+                break
+        else:
+            # No available slot, append to the list
+            all_connections.append((conn, addr, conn.makefile('rb'), conn.makefile('wb'), len(all_connections) + 1))
+        
+        # Notify the player about their new position
+        _, _, rfile, wfile, num = all_connections[i]
+        safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {num}.\n\n")
+        player_reconnecting.set()
+
 def wait_for_player_reconnect(disconnected_index):
     """Wait for a player to reconnect after disconnection."""
     global all_connections, player_reconnecting
@@ -437,10 +455,15 @@ def main():
                     # Try to accept a new connection with a timeout
                     conn, addr = server_socket.accept()
                     
-                    # Start a new thread to handle this client
-                    client_thread = threading.Thread(target=handle_client, args=(conn, addr))
-                    client_thread.daemon = True
-                    client_thread.start()
+                    if not player_reconnecting.is_set():
+                        # If a player is reconnecting, wait for them to finish
+                        print(f"[INFO] Player {addr} is reconnecting...\n")
+                        reconnect_player(conn, addr)
+                    else:
+                        # Start a new thread to handle this client
+                        client_thread = threading.Thread(target=handle_client, args=(conn, addr))
+                        client_thread.daemon = True
+                        client_thread.start()
                 except BlockingIOError:
                     # No connection available, sleep briefly to prevent CPU spinning
                     time.sleep(0.1)
