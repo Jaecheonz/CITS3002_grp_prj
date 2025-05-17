@@ -81,20 +81,19 @@ def handle_p1_quit(conn):
 def reconnect_player(conn, addr):
     """replace the disconnected player with a new connection."""
     global all_connections, player_reconnecting
-    with connection_lock:
-        # Find the first available slot for the new connection
-        for i in range(len(all_connections)):
-            if all_connections[i] is None:
-                all_connections[i] = (conn, addr, conn.makefile('rb'), conn.makefile('wb'), i + 1)
-                break
-        else:
-            # No available slot, append to the list
-            all_connections.append((conn, addr, conn.makefile('rb'), conn.makefile('wb'), len(all_connections) + 1))
-        
-        # Notify the player about their new position
-        _, _, rfile, wfile, num = all_connections[i]
-        safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {num}.\n\n")
-        player_reconnecting.set()
+    # Find the first available slot for the new connection
+    for i in range(len(all_connections)):
+        if all_connections[i] is None:
+            all_connections[i] = (conn, addr, conn.makefile('rb'), conn.makefile('wb'), i + 1)
+            return
+    else:
+        # No available slot, append to the list
+        print(f"[INFO] No available slot for reconnection.\n")
+    
+    # Notify the player about their new position
+    _, _, rfile, wfile, num = all_connections[i]
+    safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {num}.\n\n")
+    player_reconnecting.set()
 
 def wait_for_player_reconnect(disconnected_index):
     """Wait for a player to reconnect after disconnection."""
