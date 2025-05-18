@@ -6,7 +6,7 @@
 - **pycryptodome** library  
   Install with:  
   ```
-  pip install pycryptodomex
+  pip install cryptography
   ```
 
 ---
