@@ -279,7 +279,10 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
         try:
             conn, _, rfile, wfile, _ = all_connections[player_idx]
             # Use GAME_STATE packet type for critical game messages
-            if any(keyword in message for keyword in ["HIT!", "MISS!", "turn", "Timer expired", "Your turn", "Waiting for Player"]):
+            if any(keyword in message for keyword in [
+                "HIT!", "MISS!", "turn", "Timer expired", "Your turn", "Waiting for Player",
+                "Invalid", "already fired", "already_shot"
+            ]):
                 # For critical messages, retry up to 3 times
                 for attempt in range(3):
                     if safe_send(wfile, rfile, message, PACKET_TYPES['GAME_STATE']):
