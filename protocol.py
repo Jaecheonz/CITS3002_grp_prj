@@ -42,6 +42,25 @@ PACKET_TYPES = {
 _sequence_num = 0
 _sequence_lock = threading.Lock()
 
+from Cryptodome.Cipher import AES
+from Cryptodome.Util import Counter
+
+# NOTE: Key exchange is assumed to be handled out-of-band. All peers share SHARED_SECRET_KEY securely in advance.
+SHARED_SECRET_KEY = b'ThisIsASecretKey1234567890123456'  # 32 bytes
+
+def get_cipher(sequence_num):
+    iv_int = int.from_bytes(b'\x00' * 15 + bytes([sequence_num]), 'big')  # Use sequence_num as IV suffix
+    ctr = Counter.new(128, initial_value=iv_int)
+    return AES.new(SHARED_SECRET_KEY, AES.MODE_CTR, counter=ctr)
+
+def encrypt_payload(payload, sequence_num):
+    cipher = get_cipher(sequence_num)
+    return cipher.encrypt(payload)
+
+def decrypt_payload(payload, sequence_num):
+    cipher = get_cipher(sequence_num)
+    return cipher.decrypt(payload)
+
 def next_sequence_num():
     """Get the next sequence number in a thread-safe way."""
     global _sequence_num
@@ -54,6 +73,7 @@ class Packet:
         self.packet_type = packet_type
         self.sequence_num = sequence_num
         self.payload = payload
+        self.encrypted_payload = encrypt_payload(payload, sequence_num)
         self.checksum = self._calculate_checksum()
         self.timestamp = datetime.now()
     
@@ -67,7 +87,7 @@ class Packet:
         )
         
         # Calculate sum of all bytes
-        total = sum(header + self.payload)
+        total = sum(header + self.encrypted_payload)
         # Take modulo 65536 to keep checksum to 2 bytes
         return total % 65536
     
@@ -80,7 +100,7 @@ class Packet:
             self.checksum,
             len(self.payload)
         )
-        return header + self.payload
+        return header + self.encrypted_payload
     
     @classmethod
     def unpack(cls, data):
@@ -100,7 +120,9 @@ class Packet:
                 return None
             
             # Extract payload
-            payload = data[6:6+payload_len]
+            encrypted_payload = data[6:6+payload_len]
+            payload = decrypt_payload(encrypted_payload, sequence_num)
+
             
             # Create temporary packet for checksum verification
             temp_packet = cls(packet_type, sequence_num, payload)
