@@ -138,11 +138,13 @@ def main():
                     
         except KeyboardInterrupt:
             print("\n[INFO] Client exiting.")
+            sys.exit(0)
         except Exception as e:
             print(f"[ERROR] {e}")
         finally:
             running = False
             print("[INFO] Disconnected from server.")
+            sys.exit(0)
 
 if __name__ == "__main__":
     main()

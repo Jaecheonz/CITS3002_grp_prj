@@ -3,6 +3,7 @@ server.py
 """
 
 import socket
+import sys
 import threading
 import select
 import time
@@ -62,14 +63,17 @@ def cleanup_connection(conn, player_quit=False):
         pass
 
 def handle_p1_quit(conn):
+    global game_in_progress
     with connection_lock:
-        # Remove P1 (index 0)
-        print(f"[INFO] Player 1 quit.\n\n")
-        all_connections.pop(0)
-        
+        print(f"[INFO] A Player has quit.\n\n")
+        # Notify all clients
+        for entry in all_connections:
+            if entry is not None:
+                _, _, rfile, wfile, _ = entry
+                safe_send(wfile, rfile, "[INFO] Game ended due to player quit. Waiting for next game...\n\n")
         # Reset game state
         game_ready_event.clear()
-        
+        game_in_progress = False
         # Clear the connection list
         all_connections.clear()
 
@@ -115,17 +119,20 @@ def wait_for_player_reconnect(disconnected_index):
         else:
             # Timeout reached, player did not reconnect
             print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
-            # Handle disconnection
             with connection_lock:
                 all_connections[disconnected_index] = None
                 player_reconnecting.clear()
-                game_in_progress = False  # <-- Add this line to end the game
+                game_in_progress = False
+                game_ready_event.clear()
                 print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
                 # Notify all players and spectators
                 for entry in all_connections:
                     if entry is not None:
                         _, _, rfile, wfile, num = entry
                         safe_send(wfile, rfile, "[INFO] Game ended due to player disconnect. Waiting for next game...\n\n")
+                # Optionally clear all_connections if both players are gone
+                if all(c is None for c in all_connections[:MAX_PLAYERS]):
+                    all_connections.clear()
                 return False
     else:
         print(f"[INFO] Game is not in progress. No need to wait for reconnection.\n")
@@ -211,12 +218,13 @@ def check_all_connections(check_index=None):
 def monitor_connections():
     """Monitor all connections and check for disconnections."""
     global all_connections, player_reconnecting
-    while True:
+    while game_in_progress:
         with connection_lock:
             # Check all connections
             check_all_connections()
         time.sleep(1)  # Sleep for a short duration before checking again
-
+    else:
+        return
 def handle_client(conn, addr):
     """Handle a client connection by adding it to the appropriate list."""
     global game_in_progress, all_connections, countdown_timer_running
@@ -507,6 +515,7 @@ def main():
                         pass
                 all_connections.clear()
             print("[INFO] All connections closed. Server shutdown complete.\n")
+            sys.exit(0)
         except Exception as e:
             print(f"[ERROR] Server error: {e}\n")
 

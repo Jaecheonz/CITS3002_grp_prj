@@ -656,9 +656,9 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     while True:
         # Wait for reconnection before starting the turn
         if not player_reconnecting.wait(timeout=INACTIVITY_TIMEOUT):
-            send_to_player(current_player, "[INFO] Connection lost. Ending game.")
-            send_to_player(1 - current_player, "[INFO] Connection lost. Ending game.")
-            send_to_spectators("[INFO] Connection lost. Game ended.")
+            send_to_player(current_player, "[INFO] Connection lost or player quit. Ending game.")
+            send_to_player(1 - current_player, "[INFO] Connection lost or player quit. Ending game.")
+            send_to_spectators("[INFO] Connection lost or player quit. Game ended.")
             return
 
         try:
@@ -688,9 +688,9 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             while True:
                 # Wait for reconnection before each input
                 if not player_reconnecting.wait(timeout=RECONNECTING_TIMEOUT):
-                    send_to_player(current_player, "[INFO] Connection lost. Ending game.")
-                    send_to_player(1 - current_player, "[INFO] Connection lost. Ending game.")
-                    send_to_spectators("[INFO] Connection lost. Game ended.")
+                    send_to_player(current_player, "[INFO] Connection lost or player quit. Ending game.")
+                    send_to_player(1 - current_player, "[INFO] Connection lost or player quit. Ending game.")
+                    send_to_spectators("[INFO] Connection lost or player quit. Game ended.")
                     return
 
                 try:
@@ -750,10 +750,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 break
 
         except ConnectionResetError as e:
-            if not player_reconnecting.is_set():
-                if not send_to_player(1 - current_player, f"[INFO] {e}"):
-                    return
-                send_to_spectators(f"[INFO] {e}")
-                return
-            else:
-                continue
+            send_to_player(current_player, "[INFO] Connection lost or player quit. Ending game.")
+            send_to_player(1 - current_player, "[INFO] Connection lost or player quit. Ending game.")
+            send_to_spectators("[INFO] Connection lost or player quit. Game ended.")
+            return
