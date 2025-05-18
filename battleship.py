@@ -708,7 +708,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                             send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
                             send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
                         else:
-                            send_to_player(current_player, "HIT!")
+                            send_to_player(current_player, "HIT! You hit a ship!")
                             send_to_player(1 - current_player, f"Your ship was hit at {chr(65 + row)}{col + 1}!")
                             send_to_spectators(f"Player {current_player + 1} hit a ship at {chr(65 + row)}{col + 1}!")
 
@@ -719,7 +719,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                             send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
                             return
                     elif result == 'miss':
-                        send_to_player(current_player, "MISS!")
+                        send_to_player(current_player, "MISS! You missed.")
                         send_to_player(1 - current_player, f"Opponent fired at {chr(65 + row)}{col + 1} and missed.")
                         send_to_spectators(f"Player {current_player + 1} missed at {chr(65 + row)}{col + 1}!")
                     elif result == 'already_shot':

@@ -119,7 +119,13 @@ def wait_for_player_reconnect(disconnected_index):
             with connection_lock:
                 all_connections[disconnected_index] = None
                 player_reconnecting.clear()
+                game_in_progress = False  # <-- Add this line to end the game
                 print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
+                # Notify all players and spectators
+                for entry in all_connections:
+                    if entry is not None:
+                        _, _, rfile, wfile, num = entry
+                        safe_send(wfile, rfile, "[INFO] Game ended due to player disconnect. Waiting for next game...\n\n")
                 return False
     else:
         print(f"[INFO] Game is not in progress. No need to wait for reconnection.\n")
