@@ -217,14 +217,15 @@ def check_all_connections(check_index=None):
 
 def monitor_connections():
     """Monitor all connections and check for disconnections."""
-    global all_connections, player_reconnecting
+    global all_connections, player_reconnecting, game_in_progress
     while game_in_progress:
         with connection_lock:
             # Check all connections
             check_all_connections()
-        time.sleep(1)  # Sleep for a short duration before checking again
+        time.sleep(0.5)  # Sleep for a short duration before checking again
     else:
         return
+    
 def handle_client(conn, addr):
     """Handle a client connection by adding it to the appropriate list."""
     global game_in_progress, all_connections, countdown_timer_running
