@@ -1,0 +1,56 @@
+# Battleship Online - Usage Instructions
+
+## Requirements
+
+- **Python 3.8+**
+- **pycryptodome** library  
+  Install with:  
+  ```
+  pip install pycryptodome
+  ```
+
+---
+
+## Running the Server
+
+1. Open a terminal.
+2. Navigate to the project directory.
+3. Start the server:
+   ```
+   python server.py
+   ```
+   - The server listens on `127.0.0.1:5000` by default.
+
+---
+
+## Running the Client
+
+1. Open a new terminal for each player or spectator.
+2. Navigate to the project directory.
+3. Start the client:
+   ```
+   python client.py
+   ```
+   - The first two clients to connect are players; others are spectators.
+   - Players will be prompted to place ships (randomly or manually).
+   - Type `quit` at any prompt to leave the game.
+
+---
+
+## Testing the Protocol
+
+To run protocol tests and see logs:
+```
+python test_protocol.py
+```
+Results are saved in `protocol_test.log`.
+
+---
+
+## Notes
+
+- If you see errors about the port being in use, make sure no other process is using port 5000, or change the port in `server.py` and `client.py`.
+- If a player disconnects, the game will pause and wait for reconnection.
+- Spectators can join at any time to view the game boards.
+
+---
