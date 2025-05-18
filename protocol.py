@@ -48,6 +48,54 @@ from Cryptodome.Util import Counter
 # NOTE: Key exchange is assumed to be handled out-of-band. All peers share SHARED_SECRET_KEY securely in advance.
 SHARED_SECRET_KEY = b'ThisIsASecretKey1234567890123456'  # 32 bytes
 
+class ReplayWindow:
+    def __init__(self, size=64):
+        self.window_size = size
+        self.latest_seq = -1
+        self.bitmask = 0  # Bitmask for seen-and-ACKed packets
+        self.pending = set()  # Set of sequence numbers pending ACK
+
+    def mark_acknowledged(self, seq):
+        """Call this when a packet has been acknowledged (e.g., you sent an ACK)."""
+        offset = (self.latest_seq - seq) % 256
+        if offset < self.window_size:
+            self.bitmask |= (1 << offset)
+            logger.info(f"Marked packet {seq} as acknowledged with offset {offset}")
+        self.pending.discard(seq)
+
+    def is_replay(self, seq):
+        """Returns True if this is a replay and not a retransmission."""
+        if seq in self.pending:
+            # It's a retransmission of something still pending ACK — allow it
+            return False
+
+        diff = (seq - self.latest_seq) % 256
+        if diff == 0:
+            return True  # exact same sequence number — possible true replay
+        elif diff < 128:  # newer packet
+            if diff >= self.window_size:
+                self.bitmask = 1 << 0  # reset bitmask
+            else:
+                self.bitmask <<= diff
+                self.bitmask |= 1
+            self.latest_seq = seq
+            self.pending.add(seq)
+            return False
+        else:  # older packet
+            offset = (self.latest_seq - seq) % 256
+            if offset >= self.window_size:
+                return True  # too old
+            if (self.bitmask >> offset) & 1:
+                return True  # already seen and acknowledged
+            if seq in self.pending:
+                return False  # valid retransmission
+            return True  # untracked old packet = suspicious
+
+replay_window = ReplayWindow()
+
+def is_replay(seq):
+    return replay_window.is_replay(seq)
+
 def get_cipher(sequence_num):
     iv_int = int.from_bytes(b'\x00' * 15 + bytes([sequence_num]), 'big')  # Use sequence_num as IV suffix
     ctr = Counter.new(128, initial_value=iv_int)
@@ -80,10 +128,11 @@ class Packet:
     def _calculate_checksum(self):
         """Calculate a simple sum-based checksum."""
         # Format: [type(1B)][seq(1B)][payload_len(2B)][payload]
-        header = struct.pack('!BBH',
+        header = struct.pack('!BBHH',
             self.packet_type,
             self.sequence_num,
-            len(self.payload)
+            0,  # placeholder for checksum during calculation
+            len(self.encrypted_payload)
         )
         
         # Calculate sum of all bytes
@@ -98,7 +147,7 @@ class Packet:
             self.packet_type,
             self.sequence_num,
             self.checksum,
-            len(self.payload)
+            len(self.encrypted_payload)
         )
         return header + self.encrypted_payload
     
@@ -256,6 +305,11 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
                 request_retransmission(wfile)
             return None
             
+        # Replay protection
+        if is_replay(packet.sequence_num):
+            logger.warning(f"Replay attack detected: duplicate or old sequence number {packet.sequence_num}")
+            return None
+
         # Send ACK for all non-ACK packets
         if packet.packet_type != PACKET_TYPES['ACK']:
             send_ack(wfile, packet.sequence_num)
@@ -291,6 +345,7 @@ def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
                         if packet_type == PACKET_TYPES['ACK']:
                             if (ack_seq % 256) == (sequence_num % 256):
                                 logger.info(f"Received matching ACK for packet {sequence_num}")
+                                replay_window.mark_acknowledged(sequence_num)
                                 return True
                             logger.info(f"Received ACK for sequence {ack_seq}, waiting for {sequence_num}")
                             continue  # Keep waiting for our ACK

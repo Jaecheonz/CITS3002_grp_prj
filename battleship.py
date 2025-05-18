@@ -18,6 +18,7 @@ import logging
 RECONNECTING_TIMEOUT = 30
 MAX_PLAYERS = 2
 INACTIVITY_TIMEOUT = 120
+GAME_MOVE_TIMEOUT = 20
 BOARD_SIZE = 10
 SHIPS = [
     ("Carrier", 5),
@@ -376,7 +377,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             print(f"Error receiving from player {player_idx}: {e}")
             return None
 
-    def handle_input_during_turn(player_idx, timeout=INACTIVITY_TIMEOUT):
+    def handle_input_during_turn(player_idx, timeout=GAME_MOVE_TIMEOUT):
         """Handle input during a player's turn, focusing on timer and coordinate validation."""
         start_time = time.time()
         reminders_sent = set()
@@ -398,8 +399,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 send_to_player(player_idx, "[INFO] Timer expired! Your turn is over.")
                 return None
 
-            # Send reminders at 10s and 5s remaining
-            reminder_thresholds = [10, 5]
+            # Send reminders at 15s, 10s, 5s, 3s, 1s remaining
+            reminder_thresholds = [15, 10, 5, 3, 1]
             for threshold in reminder_thresholds:
                 if time_remaining <= threshold and threshold not in reminders_sent:
                     send_to_player(player_idx, f"[INFO] Enter a coordinate to fire at ({threshold}s remaining)")
