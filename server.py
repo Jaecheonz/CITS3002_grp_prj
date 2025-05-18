@@ -97,28 +97,34 @@ def reconnect_player(conn, addr):
 
 def wait_for_player_reconnect(disconnected_index):
     """Wait for a player to reconnect after disconnection."""
-    global all_connections, player_reconnecting
-    
-    start_time = time.time()
+    global all_connections, player_reconnecting, game_in_progress
 
-    print(f"[INFO] Waiting for Player {disconnected_index + 1} to reconnect...\n")
-    # Wait for a maximum of CONNECTION_TIMEOUT seconds
-    while time.time() < start_time + CONNECTION_TIMEOUT:
-        if all_connections[disconnected_index] is not None:
-            # Player has reconnected
-            print(f"[INFO] Player {disconnected_index + 1} has reconnected.\n")
-            player_reconnecting.set()
-            return True
-        time.sleep(1)
+    if game_in_progress:
+        print(f"[INFO] Game is in progress. Attempting Reconnection.\n")
+        start_time = time.time()
+
+        print(f"[INFO] Waiting for Player {disconnected_index + 1} to reconnect...\n")
+        # Wait for a maximum of CONNECTION_TIMEOUT seconds
+        while time.time() < start_time + CONNECTION_TIMEOUT:
+            if all_connections[disconnected_index] is not None:
+                # Player has reconnected
+                print(f"[INFO] Player {disconnected_index + 1} has reconnected.\n")
+                player_reconnecting.set()
+                return True
+            time.sleep(1)
+        else:
+            # Timeout reached, player did not reconnect
+            print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
+            # Handle disconnection
+            with connection_lock:
+                all_connections[disconnected_index] = None
+                player_reconnecting.clear()
+                print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
+                return False
     else:
-        # Timeout reached, player did not reconnect
-        print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
-        # Handle disconnection
-        with connection_lock:
-            all_connections[disconnected_index] = None
-            player_reconnecting.clear()
-            print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
-            return False
+        print(f"[INFO] Game is not in progress. No need to wait for reconnection.\n")
+        player_reconnecting.clear()
+        return False
 
 def check_all_connections(check_index=None):
     """Check all connections in the server and handle disconnections appropriately.
@@ -171,10 +177,11 @@ def check_all_connections(check_index=None):
                 player_reconnecting.clear()
                 print(f"[INFO] Player {num} disconnected. Game will be paused.\n")
                 # Wait for player to reconnect
-                if wait_for_player_reconnect(i):
-                    print(f"[DEBUG] a player reconnection detected in check_all_connections")
-                    # Player reconnected, resume game
-                    return False
+                if game_in_progress:
+                    if wait_for_player_reconnect(i):
+                        print(f"[DEBUG] a player reconnection detected in check_all_connections")
+                        # Player reconnected, resume game
+                        return False
 
             else:  # This is a spectator
                 # Remove spectator from list
@@ -454,7 +461,7 @@ def main():
                     # Try to accept a new connection with a timeout
                     conn, addr = server_socket.accept()
                     
-                    if not player_reconnecting.is_set():
+                    if not player_reconnecting.is_set() and game_in_progress:
                         # If a player is reconnecting, wait for them to finish
                         print(f"[INFO] Player {addr} is reconnecting...\n")
                         reconnect_player(conn, addr)

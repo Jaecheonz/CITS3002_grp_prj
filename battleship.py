@@ -15,6 +15,7 @@ import time
 from protocol import safe_send, safe_recv, PACKET_TYPES
 import logging
 
+RECONNECTING_TIMEOUT = 30
 MAX_PLAYERS = 2
 INACTIVITY_TIMEOUT = 15
 BOARD_SIZE = 10
@@ -270,9 +271,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     """
     Run a 2-player Battleship game with I/O redirected to socket file objects.
     Args:
-        player_rfiles: List of 2 file-like objects to .readline() from clients
-        player_wfiles: List of 2 file-like objects to .write() back to clients
-        spectator_wfiles: List of file-like objects to .write() to spectators
+        player_reconnecting: threading.Event() - set when all players are connected, cleared if a player is reconnecting
+        all_connections: list of tuples for each player/spectator
     """
     def send_to_player(player_idx, message):
         """Send a message to a player."""
@@ -378,10 +378,18 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
         start_time = time.time()
         reminders_sent = set()
 
+        # Wait for reconnection before allowing input
+        if not player_reconnecting.wait(timeout=RECONNECTING_TIMEOUT):
+            return None
+
         if not send_to_player(player_idx, f"[INFO] Enter a coordinate to fire at ({timeout}s remaining)"):
             return None
 
         while True:
+            # Pause if a player is reconnecting
+            if not player_reconnecting.wait(timeout=RECONNECTING_TIMEOUT):
+                return None
+
             time_remaining = timeout - (time.time() - start_time)
             if time_remaining <= 0:
                 send_to_player(player_idx, "[INFO] Timer expired! Your turn is over.")
@@ -637,13 +645,19 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 return
         except ConnectionResetError:
             return
-    
+
     send_to_spectators("Game is starting! You will receive updates as the game progresses.")
-    
+
     current_player = 0
-    
+
     while True:
-        player_reconnecting.wait()
+        # Wait for reconnection before starting the turn
+        if not player_reconnecting.wait(timeout=INACTIVITY_TIMEOUT):
+            send_to_player(current_player, "[INFO] Connection lost. Ending game.")
+            send_to_player(1 - current_player, "[INFO] Connection lost. Ending game.")
+            send_to_spectators("[INFO] Connection lost. Game ended.")
+            return
+
         try:
             # Show boards to current player
             if not send_to_player(current_player, "Your board:"):
@@ -654,7 +668,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 return
             if not send_board_to_player(current_player, boards[1 - current_player], False):
                 return
-            
+
             # Send turn notification
             if not send_to_player(current_player, f"\n[INFO] It's your turn to fire!\n\n[INFO] Enter coordinate to fire at (e.g., B5):"):
                 return
@@ -666,73 +680,74 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             send_board_to_spectators(boards[0])
             send_to_spectators(f"\nPlayer 2's Board:\n")
             send_board_to_spectators(boards[1])
-            
+
             # Get firing coordinate from current player
             while True:
+                # Wait for reconnection before each input
+                if not player_reconnecting.wait(timeout=RECONNECTING_TIMEOUT):
+                    send_to_player(current_player, "[INFO] Connection lost. Ending game.")
+                    send_to_player(1 - current_player, "[INFO] Connection lost. Ending game.")
+                    send_to_spectators("[INFO] Connection lost. Game ended.")
+                    return
+
                 try:
                     coord_str = handle_input_during_turn(current_player)
                     if coord_str is None:  # Timeout or disconnection
                         current_player = 1 - current_player  # Switch turns
-                        continue
-                    
+                        break
+
                     # Process the coordinate
                     row, col = coord_str
-                    
+
                     result, sunk_name = boards[1 - current_player].fire_at(row, col)
-                    
+
                     # Update all players and spectators
                     if result == 'hit':
                         if sunk_name:
-                            # Try to send sunk ship messages
                             send_to_player(current_player, f"HIT! You sank the {sunk_name}!")
                             send_to_player(1 - current_player, f"Your {sunk_name} was sunk!")
                             send_to_spectators(f"Player {current_player + 1} sank Player {2 - current_player}'s {sunk_name}!")
                         else:
-                            # Try to send hit messages
                             send_to_player(current_player, "HIT!")
                             send_to_player(1 - current_player, f"Your ship was hit at {chr(65 + row)}{col + 1}!")
                             send_to_spectators(f"Player {current_player + 1} hit a ship at {chr(65 + row)}{col + 1}!")
-                        
+
                         # Check if all ships are sunk
                         if boards[1 - current_player].all_ships_sunk():
-                            # Try to send game over messages
                             send_to_player(current_player, "Congratulations! You sank all ships!")
                             send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
                             send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
                             return
                     elif result == 'miss':
-                        # Try to send miss messages
                         send_to_player(current_player, "MISS!")
                         send_to_player(1 - current_player, f"Opponent fired at {chr(65 + row)}{col + 1} and missed.")
                         send_to_spectators(f"Player {current_player + 1} missed at {chr(65 + row)}{col + 1}!")
                     elif result == 'already_shot':
-                        # Try to send already shot message
                         send_to_player(current_player, "You've already fired at that location.")
                         continue
-                    
+
                     # Update spectator boards after each move
                     send_to_spectators(f"\nPlayer 1's Board:\n")
                     send_board_to_spectators(boards[0])
                     send_to_spectators(f"\nPlayer 2's Board:\n")
                     send_board_to_spectators(boards[1])
-                
+
                 except ValueError as e:
                     send_to_player(current_player, f"Invalid input: {e}")
                     continue
 
                 # Force a small delay to ensure messages are sent
                 time.sleep(0.1)
-                
+
                 # Switch players
                 current_player = 1 - current_player
 
                 # Force another small delay to ensure turn change messages are sent
                 time.sleep(0.1)
                 break
-                
+
         except ConnectionResetError as e:
             if not player_reconnecting.is_set():
-                # Player reconnected
                 if not send_to_player(1 - current_player, f"[INFO] {e}"):
                     return
                 send_to_spectators(f"[INFO] {e}")
