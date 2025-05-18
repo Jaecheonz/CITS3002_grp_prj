@@ -17,7 +17,7 @@ import logging
 
 RECONNECTING_TIMEOUT = 30
 MAX_PLAYERS = 2
-INACTIVITY_TIMEOUT = 15
+INACTIVITY_TIMEOUT = 120
 BOARD_SIZE = 10
 SHIPS = [
     ("Carrier", 5),
@@ -326,8 +326,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 print(f"[DEBUG] Cannot send board to player {player_idx} - connection is None")
                 return False
             # Build the entire board message as a single string
-            board_msg = "GRID\n"  # Start with GRID marker
-            board_msg += "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n'
+            board_msg = "GRID\n+"  # Start with GRID marker
+            board_msg += "  " + " ".join(str(i + 1) for i in range(board.size)) + '\n'
             for row in range(board.size):
                 row_label = chr(65 + row)  # A, B, C, ...
                 row_str = " ".join(board.hidden_grid[row] if show_hidden else board.display_grid[row])
@@ -345,8 +345,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
         """Send a board representation to all spectators."""
         try:
             # Build the entire board message as a single string
-            board_msg = "GRID\n"  # Start with GRID marker
-            board_msg += "  " + " ".join(str(i + 1).rjust(2) for i in range(board.size)) + '\n'
+            board_msg = "GRID\n+"  # Start with GRID marker
+            board_msg += "  " + " ".join(str(i + 1) for i in range(board.size)) + '\n'
             for row in range(board.size):
                 row_label = chr(65 + row)  # A, B, C, ...
                 row_str = " ".join(board.display_grid[row])
