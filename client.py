@@ -47,6 +47,8 @@ def receive_messages(rfile, wfile):
                 elif "Invalid" in message or "Invalid coordinate" in message:
                     # Keep turn if move was invalid
                     is_my_turn = True
+                elif "Place your ships" in message:
+                    is_setup_phase = True
                 elif "Waiting for Player" in message:
                     # Only change turn state if we haven't just had an invalid move
                     if not is_my_turn:  # Only change if we weren't already in our turn

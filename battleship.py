@@ -391,7 +391,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             reminder_thresholds = [10, 5]
             for threshold in reminder_thresholds:
                 if time_remaining <= threshold and threshold not in reminders_sent:
-                    send_to_player(player_idx, f"[INFO] Enter a coordinate to fire at ({time_remaining}s remaining)")
+                    send_to_player(player_idx, f"[INFO] Enter a coordinate to fire at ({threshold}s remaining)")
                     reminders_sent.add(threshold)
                     break
 
@@ -641,7 +641,6 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     send_to_spectators("Game is starting! You will receive updates as the game progresses.")
     
     current_player = 0
-    last_move_time = time.time()
     
     while True:
         player_reconnecting.wait()
@@ -726,7 +725,6 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                 
                 # Switch players
                 current_player = 1 - current_player
-                last_move_time = time.time()
 
                 # Force another small delay to ensure turn change messages are sent
                 time.sleep(0.1)

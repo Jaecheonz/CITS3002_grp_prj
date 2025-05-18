@@ -324,7 +324,7 @@ def start_game_countdown():
                 if num <= MAX_PLAYERS:
                     safe_send(wf, rf, f"[INFO] Game is starting! You are Player {num}.\n\n")
                 else:
-                    safe_send(wf, rf, "[INFO] Game is starting!\n\n")
+                    safe_send(wf, rf, f"[INFO] Game is starting! You are Spectator {num - MAX_PLAYERS}.\n\n")
 
         print(f"[DEBUG] monitor connections thread started")
         # start check connections thread
@@ -366,7 +366,7 @@ def start_game_countdown():
                 all_connections[0] = all_connections[1]
                 all_connections[1] = None
                 # Notify the player about their new position
-                _, _, _, wfile, _ = all_connections[0]
+                _, _, rfile, wfile, _ = all_connections[0]
                 safe_send(wfile, rfile, f"[INFO] You will be Player 1 in the next game!\n\n")
                 print(f"[DEBUG] moved P2 to P1 position")
             
@@ -383,7 +383,7 @@ def start_game_countdown():
                             all_connections[slot] = all_connections[i]
                             all_connections.pop(i)
                             # Notify the promoted spectator
-                            _, _, _, wfile, _ = all_connections[slot]
+                            _, _, rfile_, wfile, _ = all_connections[slot]
                             safe_send(wfile, rfile, f"[INFO] You have been promoted to Player {slot + 1} for the next game!\n\n")
                             break
             
@@ -396,17 +396,6 @@ def start_game_countdown():
                     all_connections[i] = (conn, addr, rfile, wfile, MAX_PLAYERS + spectator_count)
                     safe_send(wfile, rfile, f"[INFO] You are now Spectator {spectator_count}.\n\n")
             
-            # Notify all spectators about the next players
-            for i in range(MAX_PLAYERS, len(all_connections)):
-                if all_connections[i] is not None:
-                    _, _, _, wfile, _ = all_connections[i]
-                    safe_send(wfile, rfile, f"[INFO] The next game will be played by:\n")
-                    for j in range(MAX_PLAYERS):
-                        if all_connections[j] is not None:
-                            _, addr, _, _, num = all_connections[j]
-                            safe_send(wfile, rfile, f"  Player {num}: {addr[0]}:{addr[1]}\n")
-                    safe_send(wfile, rfile, f"\nGame will start in {GAME_START_DELAY} seconds.\n\n")
-                    
             # Update player numbers
             for i in range(len(all_connections)):
                 if all_connections[i] is not None:  # Only update if connection exists
@@ -436,7 +425,7 @@ def start_game_countdown():
 
         else:
             print("[DEBUG] Not enough players for next game")
-            for _, _, _, wfile, _ in get_spectators():
+            for _, _, rfile, wfile, _ in get_spectators():
                 safe_send(wfile, rfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
     
     except Exception as e:
