@@ -52,7 +52,7 @@ Error logs are printed to `protocol_errors.log`, it may get really bloated durin
 
 - If you see errors about the port being in use, make sure no other process is using port 5000, or change the port in `server.py` and `client.py`.
 - If a player disconnects, the game will pause and wait for reconnection.
-- Spectators can join during the first game countdown or during the game phase to view the game boards as well as enter the "waiting list" for them to be promoted when the orignal players quit.
+- Spectators can join during the first game countdown or during the game phase to view the game boards and enter the "waiting list" for them to be promoted when the original players quit.
 - Sometimes, the game will freeze, this is due to severe packet corruption. Restarting the server for a new game will fix this issue.
 - If you feel the game is freezing, wait for the Client message, as long as that arrives, the game is completely fine, else restart the server as above.
 - We have used a very simple sum based checksum, but corruption can be VERY severe occasionally. We humbly request the tester to restart the server when it occurs.
