@@ -39,20 +39,51 @@ class ServerState(Enum):
     IDLE          = auto()   # waiting for first player of a brand-new game
     COUNTDOWN     = auto()   # 2 players present, countdown running
     IN_GAME       = auto()   # game_in_progress == True
-    PAUSED        = auto()   # one of the players dropped out
     POST_GAME     = auto()   # cleaning up after a game, no new connections
 
 # current state variable
 state_lock = threading.Lock()
 server_state = ServerState.IDLE
 
-def get_active_players():
-    """Get the first two players from all_connections."""
-    return all_connections[:2]
+def reset_server_state():
+    global countdown_timer_running, all_connections, game_in_progress, game_ready_event, player_reconnecting
 
-def get_spectators():
-    """Get all connections after the first two."""
-    return all_connections[2:]
+    # Reset lists and flags
+    all_connections.clear()
+
+    # Reset control flags and events
+    countdown_timer_running = False
+    game_in_progress = False
+
+    if game_ready_event.is_set():
+        game_ready_event.clear()
+
+    if not player_reconnecting.is_set():
+        player_reconnecting.set()
+
+    print("[DEBUG] Server state has been reset.")
+
+def get_active_players():
+    """Return a list of the first two connected players (ignores spectators)."""
+    active = []
+    for i in range(2):
+        if i >= len(all_connections):
+            continue
+        entry = all_connections[i]
+        if entry is None:
+            continue
+        conn, _, _, _, _ = entry
+        try:
+            # Check if socket is still connected
+            readable, _, _ = select.select([conn], [], [], 0)
+            if readable:
+                data = conn.recv(1, socket.MSG_PEEK)
+                if not data:
+                    continue  # Connection closed
+            active.append(entry)
+        except:
+            continue  # Treat any socket error as a disconnection
+    return active
 
 def cleanup_connection(conn, player_quit=False):
     """Clean up a connection and its associated resources."""
@@ -115,46 +146,6 @@ def reconnect_player(conn, addr):
     _, _, rfile, wfile, num = all_connections[i]
     safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {num}.\n\n")
     player_reconnecting.set()
-
-def wait_for_player_reconnect(disconnected_index):
-    """Wait for a player to reconnect after disconnection."""
-    global all_connections, player_reconnecting, game_in_progress
-
-    if game_in_progress:
-        print(f"[INFO] Game is in progress. Attempting Reconnection.\n")
-        start_time = time.time()
-
-        print(f"[INFO] Waiting for Player {disconnected_index + 1} to reconnect...\n")
-        # Wait for a maximum of CONNECTION_TIMEOUT seconds
-        while time.time() < start_time + CONNECTION_TIMEOUT:
-            if all_connections[disconnected_index] is not None:
-                # Player has reconnected
-                print(f"[INFO] Player {disconnected_index + 1} has reconnected.\n")
-                player_reconnecting.set()
-                return True
-            time.sleep(1)
-        else:
-            # Timeout reached, player did not reconnect
-            print(f"[INFO] Player {disconnected_index + 1} did not reconnect in time.\n")
-            with connection_lock:
-                all_connections[disconnected_index] = None
-                player_reconnecting.clear()
-                game_in_progress = False
-                game_ready_event.clear()
-                print(f"[INFO] Player {disconnected_index + 1} has been removed from the game.\n")
-                # Notify all players and spectators
-                for entry in all_connections:
-                    if entry is not None:
-                        _, _, rfile, wfile, num = entry
-                        safe_send(wfile, rfile, "[INFO] Game ended due to player disconnect. Waiting for next game...\n\n")
-                # Optionally clear all_connections if both players are gone
-                if all(c is None for c in all_connections[:MAX_PLAYERS]):
-                    all_connections.clear()
-                return False
-    else:
-        print(f"[INFO] Game is not in progress. No need to wait for reconnection.\n")
-        player_reconnecting.clear()
-        return False
 
 def check_all_connections(check_index=None):
     """Check all connections in the server and handle disconnections appropriately.
@@ -300,7 +291,8 @@ def handle_client(conn, addr):
                     safe_send(wf, rf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n")
             
             # Check if ready to start countdown
-            if len(get_active_players()) == MAX_PLAYERS and not game_in_progress:
+            active_players = get_active_players()
+            if len(active_players) == MAX_PLAYERS and not game_in_progress:
                 with countdown_timer_lock:
                     if not countdown_timer_running:
                         countdown_timer_running = True
@@ -347,9 +339,7 @@ def handle_client(conn, addr):
             # not enough players – kick the leftover socket(s) and reset
             for entry in players_connected:
                 _, _, rf, wf, _ = entry
-                safe_send(wf, rf,
-                          "[INFO] Not enough players for next game. "
-                          "Disconnecting – please reconnect later.\n\n")
+                safe_send(wf, rf, "[INFO] Not enough players for next game. Disconnecting – please reconnect later.\n\n")
                 try: entry[0].close()
                 except: pass
             all_connections.clear()
@@ -474,7 +464,8 @@ def start_game_countdown():
         print(f"[DEBUG] Countdown timer running: {countdown_timer_running}")
 
         # Start countdown for next game if we have enough players
-        if len(get_active_players()) == MAX_PLAYERS:
+        active_players = get_active_players()
+        if len(active_players) == MAX_PLAYERS:
             print("[DEBUG] Attempting to start next game countdown")
             with countdown_timer_lock:
                 if not countdown_timer_running:
@@ -490,13 +481,25 @@ def start_game_countdown():
                     print("[DEBUG] Countdown already running")
 
         else:
-            print("[DEBUG] Not enough players for next game")
-            for entry in get_spectators():
-                if entry is None:
-                    continue
-                _, _, rfile, wfile, _ = entry
-                safe_send(wfile, rfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
+            print("[DEBUG] Not enough active players. Disconnecting remaining clients and resetting server.")
+            
+            with connection_lock:
+                player1_entry = all_connections[0]
+                if player1_entry is not None:
+                    conn, _, rfile, wfile, _ = player1_entry
+                    try:
+                        safe_send(wfile, rfile, "[INFO] Not enough players to start. Disconnecting...\n")
+                    except Exception as e:
+                        print(f"[WARN] Failed to send disconnect message: {e}")
+                    try:
+                        conn.close()
+                    except Exception as e:
+                        print(f"[WARN] Failed to close socket: {e}")
+                    all_connections[0] = None
+
             with state_lock:
+                print("[DEBUG] Resetting server state")
+                reset_server_state()
                 server_state = ServerState.IDLE
     
     except Exception as e:
@@ -509,14 +512,6 @@ def start_game_countdown():
         # mark server as in post-game cleanup phase
         with state_lock:
             server_state = ServerState.POST_GAME
-
-def maybe_start_countdown():
-    global server_state
-    if server_state is ServerState.IDLE and len(get_active_players()) == MAX_PLAYERS:
-        server_state = ServerState.COUNTDOWN
-        start_timer_thread = threading.Thread(target=start_game_countdown)
-        start_timer_thread.daemon = True
-        start_timer_thread.start()
 
 def main():
     global server_state
@@ -542,10 +537,7 @@ def main():
                     continue
 
                 with connection_lock:
-                    vacant_player = next((i for i in range(MAX_PLAYERS)
-                                          if i < len(all_connections) and
-                                             all_connections[i] is None),
-                                         None)
+                    vacant_player = next((i for i in range(MAX_PLAYERS) if i < len(all_connections) and all_connections[i] is None), None)
 
                     # RECONNECTION
                     if vacant_player is not None:
@@ -555,13 +547,11 @@ def main():
 
                     # FRESH GAME
                     if server_state is ServerState.IDLE:
-                        client_thread = threading.Thread(target=handle_client,
-                                                         args=(conn, addr))
+                        client_thread = threading.Thread(target=handle_client, args=(conn, addr))
                         client_thread.daemon = True
                         client_thread.start()
                         continue    # accept next
 
-                    # ------------  OTHERWISE: REJECT ------------
                     # If we are in cleanup phase or connection limit reached
                     wfile = conn.makefile('wb')
                     rfile = conn.makefile('rb')

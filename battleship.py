@@ -694,7 +694,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
 
             # Small sleep to avoid busy loop if REMINDER_INTERVAL is large.
             time.sleep(0.5)
-    
+    return
     while True:
         # Ensure both players are connected before starting the turn.
         if not player_reconnecting.is_set():
