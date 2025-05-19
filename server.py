@@ -447,7 +447,7 @@ def start_game_countdown():
                             all_connections[slot] = all_connections[i]
                             all_connections.pop(i)
                             # Notify the promoted spectator
-                            _, _, rfile_, wfile, _ = all_connections[slot]
+                            _, _, rfile, wfile, _ = all_connections[slot]
                             safe_send(wfile, rfile, f"[INFO] You have been promoted to Player {slot + 1} for the next game!\n\n")
                             break
             
