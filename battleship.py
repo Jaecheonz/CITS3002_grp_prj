@@ -15,10 +15,10 @@ import time
 from protocol import safe_send, safe_recv, PACKET_TYPES
 import logging
 
-RECONNECTING_TIMEOUT = 30
+RECONNECTING_TIMEOUT = 35
 MAX_PLAYERS = 2
 INACTIVITY_TIMEOUT = 120
-GAME_MOVE_TIMEOUT = 60
+GAME_MOVE_TIMEOUT = 20
 BOARD_SIZE = 10
 SHIPS = [
     ("Carrier", 5),
@@ -694,7 +694,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
 
             # Small sleep to avoid busy loop if REMINDER_INTERVAL is large.
             time.sleep(0.5)
-    return
+    
     while True:
         # Ensure both players are connected before starting the turn.
         if not player_reconnecting.is_set():
