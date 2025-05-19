@@ -50,9 +50,8 @@ def receive_messages(rfile, wfile):
                 elif "Place your ships" in message:
                     is_setup_phase = True
                 elif "Waiting for Player" in message:
-                    # Only change turn state if we haven't just had an invalid move
-                    if not is_my_turn:  # Only change if we weren't already in our turn
-                        is_my_turn = False
+                    # Always suspend input while waiting for reconnection
+                    is_my_turn = False
                 elif "Timer expired!" in message:
                     is_my_turn = False  # Turn was given up due to timeout
                 elif "All ships have been placed. Game is starting!" in message:

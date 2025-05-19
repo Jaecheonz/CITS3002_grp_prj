@@ -20,7 +20,7 @@ MAX_SPECTATORS = 12  # Maximum number of spectators allowed (increased to accomm
 GAME_START_DELAY = 8  # Seconds to wait after minimum players join before starting
 INACTIVITY_TIMEOUT = 30  # Seconds before a player's turn is skipped
 GAME_END_DELAY = 10  # Seconds to wait after game ends before starting new game
-CONNECTION_TIMEOUT = 30  # Seconds before a connection is considered inactive
+CONNECTION_TIMEOUT = 60  # Seconds before a connection is considered inactive
 
 # Global variables to track connections and games
 all_connections = []  # List of (conn, addr, rfile, wfile, player_num) for all connections
@@ -89,6 +89,10 @@ def reconnect_player(conn, addr):
     for i in range(len(all_connections)):
         if all_connections[i] is None:
             all_connections[i] = (conn, addr, conn.makefile('rb'), conn.makefile('wb'), i + 1)
+            # Notify the player and mark as reconnected
+            _, _, rfile, wfile, num = all_connections[i]
+            safe_send(wfile, rfile, f"[INFO] Welcome back! You are Player {num}.\n\n")
+            player_reconnecting.set()
             return
     else:
         # No available slot, append to the list
@@ -189,13 +193,9 @@ def check_all_connections(check_index=None):
                 all_connections[i] = None
                 player_reconnecting.clear()
                 print(f"[INFO] Player {num} disconnected. Game will be paused.\n")
-                # Wait for player to reconnect
-                if game_in_progress:
-                    if wait_for_player_reconnect(i):
-                        print(f"[DEBUG] a player reconnection detected in check_all_connections")
-                        # Player reconnected, resume game
-                        return False
-
+                # During an active game we let the game-logic thread handle
+                # the pause / reconnection window.  The monitor thread only
+                # marks the slot and exits quickly.
             else:  # This is a spectator
                 # Remove spectator from list
                 all_connections.pop(i)
@@ -278,8 +278,11 @@ def handle_client(conn, addr):
             
             safe_send(wfile, rfile, "[TIP] Type 'quit' to exit.\n\n")
             
-            # Notify all connected clients
-            for c, _, rf, wf, _ in all_connections:
+            # Notify all connected clients (skip empty slots)
+            for entry in all_connections:
+                if entry is None:
+                    continue
+                c, _, rf, wf, _ = entry
                 if c != conn:
                     safe_send(wf, rf, f"[INFO] New connection from {addr[0]}:{addr[1]}. ({len(all_connections)}/{MAX_PLAYERS + MAX_SPECTATORS} total connections)\n")
             
@@ -288,7 +291,10 @@ def handle_client(conn, addr):
                 with countdown_timer_lock:
                     if not countdown_timer_running:
                         countdown_timer_running = True
-                        for _, _, rf, wf, _ in all_connections:
+                        for entry in all_connections:
+                            if entry is None:
+                                continue
+                            _, _, rf, wf, _ = entry
                             safe_send(wf, rf, f"[INFO] Both players connected! Game will start in {GAME_START_DELAY} seconds.\n")
                         
                         # Start countdown thread
@@ -331,7 +337,10 @@ def start_game_countdown():
             # Wait until next announcement
             # Send countdown message to all players
                 with connection_lock:
-                    for _, _, rf, wf, _ in all_connections:
+                    for entry in all_connections:
+                        if entry is None:
+                            continue
+                        _, _, rf, wf, _ = entry
                         safe_send(wf, rf, f"[INFO] Game starting in {i} seconds...\n\n")
             time.sleep(1)
         
@@ -342,7 +351,10 @@ def start_game_countdown():
         
         # Notify all players that the game is starting
         with connection_lock:
-            for _, _, rf, wf, num in all_connections:
+            for entry in all_connections:
+                if entry is None:
+                    continue
+                _, _, rf, wf, num = entry
                 if num <= MAX_PLAYERS:
                     safe_send(wf, rf, f"[INFO] Game is starting! You are Player {num}.\n\n")
                 else:
@@ -360,7 +372,10 @@ def start_game_countdown():
 
         # After game ends, notify all players
         with connection_lock:
-            for _, _, rf, wf, num in all_connections:
+            for entry in all_connections:
+                if entry is None:
+                    continue
+                _, _, rf, wf, num = entry
                 if num <= MAX_PLAYERS:
                     safe_send(wf, rf, f"[INFO] Game has ended. You were Player {num}.\n\n[INFO] Next game will start after the {GAME_START_DELAY} second timer ends\n\n")
                 else:
@@ -426,7 +441,7 @@ def start_game_countdown():
                     if i < MAX_PLAYERS:
                         safe_send(wfile, rfile, f"[INFO] You will be Player {i + 1} in the next game!\n\n")
                     else:
-                        safe_send(wfile, rfile, f"[INFO] You are Spectator {i - MAX_PLAYERS + 1}.\n\n")
+                        safe_send(wfile, rfile, f"[INFO] Game will start soon!\n\n")
 
         print(f"[DEBUG] Number of connections: {len(all_connections)}")
         print(f"[DEBUG] Countdown timer running: {countdown_timer_running}")
@@ -447,7 +462,10 @@ def start_game_countdown():
 
         else:
             print("[DEBUG] Not enough players for next game")
-            for _, _, rfile, wfile, _ in get_spectators():
+            for entry in get_spectators():
+                if entry is None:
+                    continue
+                _, _, rfile, wfile, _ = entry
                 safe_send(wfile, rfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
     
     except Exception as e:
@@ -475,13 +493,21 @@ def main():
                 try:
                     # Try to accept a new connection with a timeout
                     conn, addr = server_socket.accept()
-                    
-                    if not player_reconnecting.is_set() and game_in_progress:
-                        # If a player is reconnecting, wait for them to finish
-                        print(f"[INFO] Player {addr} is reconnecting...\n")
+
+                    with connection_lock:
+                        vacant_player_slot = None
+                        for idx in range(min(MAX_PLAYERS, len(all_connections))):
+                            if idx >= len(all_connections):
+                                break
+                            if all_connections[idx] is None:
+                                vacant_player_slot = idx
+                                break
+
+                    if vacant_player_slot is not None:
+                        print(f"[INFO] Treating {addr} as reconnection into slot {vacant_player_slot + 1}\n")
                         reconnect_player(conn, addr)
                     else:
-                        # Start a new thread to handle this client
+                        # Regular new connection
                         client_thread = threading.Thread(target=handle_client, args=(conn, addr))
                         client_thread.daemon = True
                         client_thread.start()
@@ -494,14 +520,20 @@ def main():
             print("\n[INFO] Server shutting down...\n")
             # Notify all connected players
             with connection_lock:
-                for _, _, _, wfile, _ in all_connections:
+                for entry in all_connections:
+                    if entry is None:
+                        continue
+                    _, _, _, wfile, _ = entry
                     try:
                         wfile.write(b"[INFO] Server is shutting down. Disconnecting all players.\n\n")
                         wfile.flush()
                     except:
                         pass
                 # Close all connections
-                for conn, _, rfile, wfile, _ in all_connections:
+                for entry in all_connections:
+                    if entry is None:
+                        continue
+                    conn, _, rfile, wfile, _ = entry
                     try:
                         rfile.close()
                     except:

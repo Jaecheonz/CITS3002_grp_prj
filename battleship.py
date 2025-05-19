@@ -278,6 +278,11 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     def send_to_player(player_idx, message):
         """Send a message to a player."""
         try:
+            # Defensive guard – the slot might be empty (player dropped out)
+            if player_idx >= len(all_connections) or all_connections[player_idx] is None:
+                print(f"[DEBUG] Cannot send to player {player_idx}: slot is empty")
+                return False
+
             conn, _, rfile, wfile, _ = all_connections[player_idx]
             # Use GAME_STATE packet type for critical game messages
             if any(keyword in message for keyword in [
@@ -651,15 +656,70 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             return
 
     send_to_spectators("Game is starting! You will receive updates as the game progresses.")
-
+    
     current_player = 0
 
+    RECONNECT_TIMEOUT = 60
+    REMINDER_INTERVAL = 15
+
+    def wait_for_player_return(disconnected_idx):
+        """Pause the game and wait up to RECONNECT_TIMEOUT seconds for
+        `disconnected_idx` to reconnect.  Sends reminder messages every
+        REMINDER_INTERVAL seconds.  Returns True if the player rejoined,
+        False otherwise."""
+        start_time = time.time()
+        next_reminder = start_time + REMINDER_INTERVAL
+
+        # Inform everyone once immediately
+        send_to_spectators(f"[INFO] Waiting for Player {disconnected_idx + 1} to reconnect…")
+        send_to_player(1 - disconnected_idx, f"[INFO] Waiting for Player {disconnected_idx + 1} to reconnect…")
+
+        while True:
+            remaining = RECONNECT_TIMEOUT - (time.time() - start_time)
+            if remaining <= 0:
+                return False  # timed-out
+
+            # Wait until either player_reconnecting is set or reminder interval
+            if player_reconnecting.is_set():
+                # Player came back
+                send_to_spectators(f"[INFO] Player {disconnected_idx + 1} has reconnected — game resumes.")
+                send_to_player(1 - disconnected_idx, f"[INFO] Player {disconnected_idx + 1} reconnected. Your opponent is back!")
+                return True
+
+            # Not yet — time for another reminder?
+            if time.time() >= next_reminder:
+                send_to_spectators(f"[INFO] Still waiting for Player {disconnected_idx + 1} to reconnect… ({int(remaining)} s left)")
+                send_to_player(1 - disconnected_idx, f"[INFO] Still waiting for Player {disconnected_idx + 1} to reconnect… ({int(remaining)} s left)")
+                next_reminder += REMINDER_INTERVAL
+
+            # Small sleep to avoid busy loop if REMINDER_INTERVAL is large.
+            time.sleep(0.5)
+    return
     while True:
-        # Wait for reconnection before starting the turn
-        if not player_reconnecting.wait(timeout=INACTIVITY_TIMEOUT):
-            send_to_player(current_player, "[INFO] Connection lost or player quit. Ending game.")
-            send_to_player(1 - current_player, "[INFO] Connection lost or player quit. Ending game.")
-            send_to_spectators("[INFO] Connection lost or player quit. Game ended.")
+        # Ensure both players are connected before starting the turn.
+        if not player_reconnecting.is_set():
+            # Identify which player is missing (slot is None)
+            disconnected_idx = None
+            for idx_chk in range(MAX_PLAYERS):
+                if idx_chk >= len(all_connections) or all_connections[idx_chk] is None:
+                    disconnected_idx = idx_chk
+                    break
+
+            # If we couldn't determine, abort the game
+            if disconnected_idx is None:
+                send_to_spectators("[INFO] Player disconnected. Game ended.")
+                return
+
+            # Pause and wait for possible reconnection
+            if wait_for_player_return(disconnected_idx):
+                # Reconnected → resume the outer while-loop
+                current_player = disconnected_idx  # make sure the turn returns to the player that lost connection
+                continue
+
+            # No reconnection – declare the remaining player as winner
+            winner_idx = 1 - disconnected_idx
+            send_to_player(winner_idx, "[INFO] Opponent did not reconnect in time. You win by default!")
+            send_to_spectators(f"[INFO] Player {winner_idx + 1} wins by default – opponent failed to return.")
             return
 
         try:
