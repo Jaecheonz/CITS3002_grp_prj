@@ -146,7 +146,6 @@ def check_all_connections(check_index=None):
     global all_connections, player_reconnecting
     # First, check connections without holding the lock
     disconnected_indices = []
-    print(f"[DEBUG] Starting connection check.")
     
     # Determine which indices to check
     if check_index is not None:
