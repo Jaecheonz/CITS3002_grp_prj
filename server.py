@@ -10,7 +10,7 @@ import time
 from battleship import run_multiplayer_game_online
 import struct
 from protocol import Packet, PACKET_TYPES, next_sequence_num, safe_send, safe_recv
-from enum import Enum, auto
+import state
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -34,16 +34,9 @@ countdown_timer_lock = threading.Lock()
 player_reconnecting = threading.Event()
 player_reconnecting.set()
 
-# Server state management
-class ServerState(Enum):
-    IDLE          = auto()   # waiting for first player of a brand-new game
-    COUNTDOWN     = auto()   # 2 players present, countdown running
-    IN_GAME       = auto()   # game_in_progress == True
-    POST_GAME     = auto()   # cleaning up after a game, no new connections
-
 # current state variable
 state_lock = threading.Lock()
-server_state = ServerState.IDLE
+state.server_state = state.ServerState.IDLE
 
 def reset_server_state():
     global countdown_timer_running, all_connections, game_in_progress, game_ready_event, player_reconnecting
@@ -386,6 +379,8 @@ def start_game_countdown():
         run_multiplayer_game_online(player_reconnecting, all_connections)
 
         print(f"[DEBUG] Game finished")
+        # mark server as in post-game cleanup phase
+        state.server_state = state.ServerState.POST_GAME
 
         # After game ends, notify all players
         with connection_lock:
@@ -476,7 +471,7 @@ def start_game_countdown():
                     start_timer_thread.start()
                     print("[DEBUG] Countdown thread started")
                     with state_lock:
-                        server_state = ServerState.COUNTDOWN
+                        state.server_state = state.ServerState.COUNTDOWN
                 else:
                     print("[DEBUG] Countdown already running")
 
@@ -500,7 +495,7 @@ def start_game_countdown():
             with state_lock:
                 print("[DEBUG] Resetting server state")
                 reset_server_state()
-                server_state = ServerState.IDLE
+                state.server_state = state.ServerState.IDLE
     
     except Exception as e:
         print(f"[ERROR] Error in game countdown: {e}\n")
@@ -508,10 +503,7 @@ def start_game_countdown():
         print("[DEBUG] Resetting countdown timer flag")
         with countdown_timer_lock:
             countdown_timer_running = False
-
-        # mark server as in post-game cleanup phase
-        with state_lock:
-            server_state = ServerState.POST_GAME
+            state.server_state = state.ServerState.IDLE
 
 def main():
     global server_state
@@ -537,30 +529,53 @@ def main():
                     continue
 
                 with connection_lock:
-                    vacant_player = next((i for i in range(MAX_PLAYERS) if i < len(all_connections) and all_connections[i] is None), None)
+                    print(f"[DEBUG] Incoming connection from {addr}; server_state = {state.server_state}")
+
+                    vacant_player = next((i for i in range(MAX_PLAYERS)
+                                        if i < len(all_connections) and all_connections[i] is None), None)
 
                     # RECONNECTION
                     if vacant_player is not None:
-                        reconnect_player(conn, addr)          # sets player_reconnecting
-                        server_state = ServerState.IN_GAME           # resume immediately
+                        reconnect_player(conn, addr)
+                        state.server_state = state.ServerState.IN_GAME
                         continue
 
                     # FRESH GAME
-                    if server_state is ServerState.IDLE:
+                    if state.server_state is state.ServerState.IDLE:
                         client_thread = threading.Thread(target=handle_client, args=(conn, addr))
                         client_thread.daemon = True
                         client_thread.start()
-                        continue    # accept next
+                        continue
 
-                    # If we are in cleanup phase or connection limit reached
-                    wfile = conn.makefile('wb')
-                    rfile = conn.makefile('rb')
-                    if server_state is ServerState.POST_GAME:
+                    # IN-GAME SPECTATOR JOIN
+                    elif state.server_state is state.ServerState.IN_GAME:
+                        if len(all_connections) < MAX_PLAYERS + MAX_SPECTATORS:
+                            client_thread = threading.Thread(target=handle_client, args=(conn, addr))
+                            client_thread.daemon = True
+                            client_thread.start()
+                            continue
+                        else:
+                            reason = "Spectator slots are full – please try again later."
+
+                    # CLEANUP PHASE
+                    elif state.server_state is state.ServerState.POST_GAME:
                         reason = "Server busy finishing last game – please try again in a few seconds."
+
+                    # SETUP PHASE
+                    elif state.server_state is state.ServerState.SETUP:
+                        reason = "Server is setting up a new game – please try again shortly."
+
                     else:
                         reason = "Server is full – please try again later."
-                    safe_send(wfile, rfile, f"[INFO] {reason}\n\n")
-                    wfile.close(); rfile.close(); conn.close()
+
+                    # Reject connection
+                    wfile = conn.makefile('wb')
+                    rfile = conn.makefile('rb')
+                    safe_send(wfile, rfile, f"[INFO] {reason}\n[INFO] Please type Ctrl + C to exit.\n")
+                    wfile.close()
+                    rfile.close()
+                    conn.close()
+                    
         except KeyboardInterrupt:
             print("\n[INFO] Server shutting down...\n")
             # Notify all connected players

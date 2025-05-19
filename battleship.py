@@ -13,7 +13,8 @@ import threading
 import select
 import time
 from protocol import safe_send, safe_recv, PACKET_TYPES
-import logging
+import state
+
 
 RECONNECTING_TIMEOUT = 35
 MAX_PLAYERS = 2
@@ -60,7 +61,7 @@ class Board:
         """
         Randomly place each ship in 'ships' on the hidden_grid, storing positions for each ship.
         In a networked version, you might parse explicit placements from a player's commands
-        (e.g. "PLACE A1 H BATTLESHIP") or prompt the user for board coordinates and placement orientations; 
+        (e.g. "PLACE A1 H BATTLESHIP") or prompt the user for board coordinates and placement orientations;
         the self.place_ships_manually() can be used as a guide.
         """
         for ship_name, ship_size in ships:
@@ -278,6 +279,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     # Ensure the reconnect flag is set at the beginning of every new game so
     # timer logic inside handle_input_during_turn() starts with the correct
     # assumption that both players are present.
+    global server_state
+    state.server_state = state.ServerState.SETUP
     player_reconnecting.set()
 
     def send_to_player(player_idx, message):
@@ -308,20 +311,13 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
             if all_connections[i] is not None:
                 try:
                     conn, _, rfile, wfile, _ = all_connections[i]
-                    # Use GAME_STATE packet type for critical game messages
-                    if any(keyword in message for keyword in ["HIT!", "MISS!", "turn", "Timer expired", "Your turn", "Waiting for Player"]):
-                        # For critical messages, retry up to 3 times
-                        for attempt in range(3):
-                            if safe_send(wfile, rfile, message, PACKET_TYPES['GAME_STATE']):
-                                break
-                            time.sleep(0.1)  # Small delay between retries
-                        else:
-                            print(f"[WARNING] Failed to send critical message to Spectator {i - MAX_PLAYERS + 1} after 3 attempts")
-                            success = False
+                    for attempt in range(3):
+                        if safe_send(wfile, rfile, message, PACKET_TYPES['GAME_STATE']):
+                            break
+                        time.sleep(0.1)  # Small delay between retries
                     else:
-                        # For non-critical messages, just try once
-                        if not safe_send(wfile, rfile, message):
-                            success = False
+                        print(f"[WARNING] Failed to send critical message to Spectator {i - MAX_PLAYERS + 1} after 3 attempts")
+                        success = False
                 except Exception as e:
                     print(f"[ERROR] Failed to send message to Spectator {i - MAX_PLAYERS + 1}: {e}")
                     success = False
@@ -437,11 +433,11 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     
     # Setup phase - let players place their ships concurrently using threads
     for idx in range(2):
-        if not send_to_player(idx, f"Welcome to Online Multiplayer Battleship! You are Player {idx + 1}."):
+        if not send_to_player(idx, f"Welcome to Online Multiplayer Battleship! You are Player {idx + 1}.\nPlace your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement."):
             return
-        if not send_to_player(idx, "Place your ships. Type 'RANDOM' for random placement or 'MANUAL' for manual placement."):
-            return
-    
+        
+    send_to_spectators("Welcome to Online Multiplayer Battleship! Please wait for both players to finish setting up their ships.\n")
+
     # Using threading Event objects to synchronise the players
     player_ready_events = [threading.Event() for _ in range(2)]
     setup_success = [False] * 2  # Track whether each player completed setup successfully
@@ -658,7 +654,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
     send_to_spectators("Game is starting! You will receive updates as the game progresses.")
     
     current_player = 0
-
+    state.server_state = state.ServerState.IN_GAME
     RECONNECT_TIMEOUT = 60
     REMINDER_INTERVAL = 15
 
@@ -777,8 +773,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                             send_to_spectators(f"Player {current_player + 1} hit a ship at {chr(65 + row)}{col + 1}!")
                         # After the move, check if the opponent has lost all ships
                         if boards[1 - current_player].all_ships_sunk():
-                            send_to_player(current_player, "Congratulations! You sank all ships!")
-                            send_to_player(1 - current_player, "Game over! All your ships have been sunk.")
+                            send_to_player(current_player, "Congratulations! You sank all ships! You win!")
+                            send_to_player(1 - current_player, "Game over! All your ships have been sunk. You lose!")
                             send_to_spectators(f"Game Over! Player {current_player + 1} has won!")
                             return
                     elif result == 'miss':
