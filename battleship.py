@@ -290,19 +290,13 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
 
             conn, _, rfile, wfile, _ = all_connections[player_idx]
             # Use GAME_STATE packet type for critical game messages
-            if any(keyword in message for keyword in [
-                "HIT!", "MISS!", "turn", "Timer expired", "Your turn", "Waiting for Player",
-                "Invalid", "already fired", "already_shot"
-            ]):
-                # For critical messages, retry up to 3 times
-                for attempt in range(3):
-                    if safe_send(wfile, rfile, message, PACKET_TYPES['GAME_STATE']):
-                        return True
-                    time.sleep(0.1)  # Small delay between retries
-                print(f"[WARNING] Failed to send critical message to Player {player_idx + 1} after 3 attempts")
-                return False
-            # For non-critical messages, just try once
-            return safe_send(wfile, rfile, message)
+            for attempt in range(3):
+                if safe_send(wfile, rfile, message, PACKET_TYPES['GAME_STATE']):
+                    return True
+                time.sleep(0.1)  # Small delay between retries
+            print(f"[WARNING] Failed to send critical message to Player {player_idx + 1} after 3 attempts")
+            return False
+
         except Exception as e:
             print(f"[ERROR] Failed to send message to Player {player_idx + 1}: {e}")
             return False
@@ -433,7 +427,8 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                         continue
             except Exception as e:
                 print(f"[ERROR] Error handling input: {str(e)}")
-                return None
+                # Don't return None here, just continue the loop
+                continue
 
             time.sleep(0.1)
 
@@ -780,8 +775,7 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
                             send_to_player(current_player, "HIT! You hit a ship!")
                             send_to_player(1 - current_player, f"Your ship was hit at {chr(65 + row)}{col + 1}!")
                             send_to_spectators(f"Player {current_player + 1} hit a ship at {chr(65 + row)}{col + 1}!")
-
-                        # Check if all ships are sunk
+                        # After the move, check if the opponent has lost all ships
                         if boards[1 - current_player].all_ships_sunk():
                             send_to_player(current_player, "Congratulations! You sank all ships!")
                             send_to_player(1 - current_player, "Game over! All your ships have been sunk.")

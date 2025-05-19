@@ -41,7 +41,7 @@ PACKET_TYPES = {
 # Sequence number generator
 _sequence_num = 0
 _sequence_lock = threading.Lock()
-
+sent_packets = {}
 from Cryptodome.Cipher import AES
 from Cryptodome.Util import Counter
 
@@ -60,7 +60,6 @@ class ReplayWindow:
         offset = (self.latest_seq - seq) % 256
         if offset < self.window_size:
             self.bitmask |= (1 << offset)
-            logger.info(f"Marked packet {seq} as acknowledged with offset {offset}")
         self.pending.discard(seq)
 
     def is_replay(self, seq):
@@ -88,7 +87,9 @@ class ReplayWindow:
             if (self.bitmask >> offset) & 1:
                 return True  # already seen and acknowledged
             if seq in self.pending:
-                return False  # valid retransmission
+                return False  # Retransmission of pending
+            if offset < self.window_size and ((self.bitmask >> offset) & 1):
+                return False  # Already processed, but re-ACK
             return True  # untracked old packet = suspicious
 
 replay_window = ReplayWindow()
@@ -201,18 +202,19 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         # Create and send packet
         packet = Packet(packet_type, next_sequence_num(), payload)
         packed_data = packet.pack()
-
+        sent_packets[packet.sequence_num] = packet
         # For PLAYER_MOVE packets, we need to ensure we get an ACK before proceeding
         if packet_type == PACKET_TYPES['PLAYER_MOVE']:
-            logger.info(f"Sending PLAYER_MOVE packet {packet.sequence_num}")
             wfile.write(packed_data)
             wfile.flush()
             # Wait for ACK with a longer timeout for moves
             if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
-                logger.info(f"PLAYER_MOVE packet {packet.sequence_num} acknowledged")
                 time.sleep(0.05)  # Small delay after successful ACK
                 return True
             logger.warning(f"Failed to get ACK for PLAYER_MOVE packet {packet.sequence_num}")
+            for seq in list(sent_packets):
+                if (packet.sequence_num - seq) % 256 > replay_window.window_size:
+                    del sent_packets[seq]
             return False
 
         # For turn transition messages, we need to be extra careful
@@ -221,10 +223,12 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
             wfile.flush()
             # Wait for ACK with a longer timeout for turn transitions
             if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=1.0):
-                logger.info(f"Turn transition message acknowledged")
                 time.sleep(0.1)  # Longer delay for turn transitions
                 return True
             logger.warning(f"Failed to get ACK for turn transition message")
+            for seq in list(sent_packets):
+                if (packet.sequence_num - seq) % 256 > replay_window.window_size:
+                    del sent_packets[seq]
             return False
 
         # For all other packets, retry up to MAX_RETRIES
@@ -232,16 +236,15 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
         last_error = None
         while attempt < MAX_RETRIES:
             try:
-                logger.info(f"Sending packet {packet.sequence_num} (type: {packet_type}, size: {len(packed_data)} bytes), attempt {attempt+1}")
                 wfile.write(packed_data)
                 wfile.flush()
-                logger.info(f"Successfully wrote packet {packet.sequence_num} to socket")
 
                 # Wait for ACK with a reasonable timeout
                 if wait_for_ack(rfile, wfile, packet.sequence_num, timeout=0.5):
-                    if attempt > 0:
-                        logger.info(f"Packet {packet.sequence_num} successfully delivered after {attempt} retries")
                     time.sleep(0.05)  # Small delay after successful ACK
+                    for seq in list(sent_packets):
+                        if (packet.sequence_num - seq) % 256 > replay_window.window_size:
+                            del sent_packets[seq]
                     return True
 
                 # Log retransmission and continue trying
@@ -259,10 +262,16 @@ def safe_send(wfile, rfile, message, packet_type=PACKET_TYPES['SYSTEM_MESSAGE'])
                 continue
 
         logger.error(f"Failed to receive ACK for packet {packet.sequence_num} after {MAX_RETRIES} attempts")
+        for seq in list(sent_packets):
+            if (packet.sequence_num - seq) % 256 > replay_window.window_size:
+                del sent_packets[seq]
         return False
 
     except Exception as e:
         logger.error(f"Fatal error sending packet: {str(e)}")
+        for seq in list(sent_packets):
+            if (packet.sequence_num - seq) % 256 > replay_window.window_size:
+                del sent_packets[seq]
         return False
 
 def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
@@ -302,13 +311,24 @@ def safe_recv(rfile, wfile, timeout=INACTIVITY_TIMEOUT):
             # Only request retransmission for non-ACK packets
             if packet_type != PACKET_TYPES['ACK']:
                 logger.warning("Requesting retransmission due to packet validation failure")
-                request_retransmission(wfile)
+                request_retransmission(wfile, sequence_num)
             return None
             
         # Replay protection
         if is_replay(packet.sequence_num):
             logger.warning(f"Replay attack detected: duplicate or old sequence number {packet.sequence_num}")
-            return None
+            if packet.packet_type == PACKET_TYPES['RETRANSMISSION_REQUEST']:
+                if packet.payload:
+                    missing_seq = struct.unpack('!B', packet.payload[:1])[0]
+                    if missing_seq in sent_packets:
+                        retry_packet = sent_packets[missing_seq]
+                        try:
+                            wfile.write(retry_packet.pack())
+                            wfile.flush()
+                            logger.info(f"Retransmitted packet {missing_seq}")
+                        except Exception as e:
+                            logger.error(f"Failed to retransmit packet {missing_seq}: {str(e)}")
+                return None
 
         # Send ACK for all non-ACK packets
         if packet.packet_type != PACKET_TYPES['ACK']:
@@ -339,15 +359,12 @@ def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
                         
                     try:
                         packet_type, ack_seq, _, payload_len = struct.unpack('!BBHH', header)
-                        logger.info(f"Received packet - type: {packet_type}, seq: {ack_seq}, waiting for ACK of {sequence_num}")
                         
                         # For ACK packets, check if it matches our sequence
                         if packet_type == PACKET_TYPES['ACK']:
                             if (ack_seq % 256) == (sequence_num % 256):
-                                logger.info(f"Received matching ACK for packet {sequence_num}")
                                 replay_window.mark_acknowledged(sequence_num)
                                 return True
-                            logger.info(f"Received ACK for sequence {ack_seq}, waiting for {sequence_num}")
                             continue  # Keep waiting for our ACK
                         
                         # For non-ACK packets, read the payload and process it
@@ -375,7 +392,6 @@ def wait_for_ack(rfile, wfile, sequence_num, timeout=0.5):
                                 continue
                             
                             # For other packet types, just log and continue
-                            logger.info(f"Received non-ACK packet of type {packet_type} with {len(payload)} bytes")
                             continue
                     except struct.error as e:
                         logger.warning(f"Failed to unpack header while waiting for ACK of packet {sequence_num}: {str(e)}")
@@ -395,12 +411,15 @@ def send_ack(wfile, sequence_num):
     except Exception as e:
         logger.error(f"Error sending ACK: {str(e)}")
 
-def request_retransmission(wfile):
-    """Send a retransmission request."""
+def request_retransmission(wfile, missing_seq):
+    """Send a retransmission request for a specific sequence number."""
     try:
-        retry_packet = Packet(PACKET_TYPES['RETRANSMISSION_REQUEST'], next_sequence_num(), b'')
+        # Payload contains the sequence number being requested (1 byte)
+        payload = struct.pack('!B', missing_seq)
+        retry_packet = Packet(PACKET_TYPES['RETRANSMISSION_REQUEST'], next_sequence_num(), payload)
         wfile.write(retry_packet.pack())
         wfile.flush()
+        logger.info(f"Requested retransmission for seq={missing_seq}")
     except Exception as e:
         logger.error(f"Error requesting retransmission: {str(e)}")
 
