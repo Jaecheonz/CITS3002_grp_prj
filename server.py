@@ -10,7 +10,6 @@ import time
 from battleship import run_multiplayer_game_online
 import struct
 from protocol import Packet, PACKET_TYPES, next_sequence_num, safe_send, safe_recv
-from enum import Enum, auto
 
 HOST = '127.0.0.1'
 PORT = 5000
@@ -33,18 +32,6 @@ countdown_timer_running = False
 countdown_timer_lock = threading.Lock()
 player_reconnecting = threading.Event()
 player_reconnecting.set()
-
-# Server state management
-class ServerState(Enum):
-    IDLE          = auto()   # waiting for first player of a brand-new game
-    COUNTDOWN     = auto()   # 2 players present, countdown running
-    IN_GAME       = auto()   # game_in_progress == True
-    PAUSED        = auto()   # one of the players dropped out
-    POST_GAME     = auto()   # cleaning up after a game, no new connections
-
-# current state variable
-state_lock = threading.Lock()
-server_state = ServerState.IDLE
 
 def get_active_players():
     """Get the first two players from all_connections."""
@@ -340,20 +327,6 @@ def handle_client(conn, addr):
         handle_p1_quit(conn)
         return
 
-    with connection_lock:
-        # remove spectators; check if both players still connected
-        players_connected = [c for c in all_connections[:MAX_PLAYERS] if c]
-        if len(players_connected) < MAX_PLAYERS:
-            # not enough players – kick the leftover socket(s) and reset
-            for entry in players_connected:
-                _, _, rf, wf, _ = entry
-                safe_send(wf, rf,
-                          "[INFO] Not enough players for next game. "
-                          "Disconnecting – please reconnect later.\n\n")
-                try: entry[0].close()
-                except: pass
-            all_connections.clear()
-
 def start_game_countdown():
     """Start a countdown timer before the game begins."""
     global game_in_progress, countdown_timer_running
@@ -484,8 +457,6 @@ def start_game_countdown():
                     start_timer_thread.daemon = True
                     start_timer_thread.start()
                     print("[DEBUG] Countdown thread started")
-                    with state_lock:
-                        server_state = ServerState.COUNTDOWN
                 else:
                     print("[DEBUG] Countdown already running")
 
@@ -496,8 +467,6 @@ def start_game_countdown():
                     continue
                 _, _, rfile, wfile, _ = entry
                 safe_send(wfile, rfile, "[INFO] Waiting for more players to join before starting next game...\n\n")
-            with state_lock:
-                server_state = ServerState.IDLE
     
     except Exception as e:
         print(f"[ERROR] Error in game countdown: {e}\n")
@@ -506,20 +475,7 @@ def start_game_countdown():
         with countdown_timer_lock:
             countdown_timer_running = False
 
-        # mark server as in post-game cleanup phase
-        with state_lock:
-            server_state = ServerState.POST_GAME
-
-def maybe_start_countdown():
-    global server_state
-    if server_state is ServerState.IDLE and len(get_active_players()) == MAX_PLAYERS:
-        server_state = ServerState.COUNTDOWN
-        start_timer_thread = threading.Thread(target=start_game_countdown)
-        start_timer_thread.daemon = True
-        start_timer_thread.start()
-
 def main():
-    global server_state
     print(f"[INFO] Server listening on {HOST}:{PORT}\n")
     print(f"[INFO] Waiting for {MAX_SPECTATORS} players to connect...\n")
     
@@ -535,42 +491,31 @@ def main():
         try:
             while True:
                 try:
+                    # Try to accept a new connection with a timeout
                     conn, addr = server_socket.accept()
-                except BlockingIOError:
-                    # No incoming connection at the moment
-                    time.sleep(0.1)
-                    continue
 
-                with connection_lock:
-                    vacant_player = next((i for i in range(MAX_PLAYERS)
-                                          if i < len(all_connections) and
-                                             all_connections[i] is None),
-                                         None)
+                    with connection_lock:
+                        vacant_player_slot = None
+                        for idx in range(min(MAX_PLAYERS, len(all_connections))):
+                            if idx >= len(all_connections):
+                                break
+                            if all_connections[idx] is None:
+                                vacant_player_slot = idx
+                                break
 
-                    # RECONNECTION
-                    if vacant_player is not None:
-                        reconnect_player(conn, addr)          # sets player_reconnecting
-                        server_state = ServerState.IN_GAME           # resume immediately
-                        continue
-
-                    # FRESH GAME
-                    if server_state is ServerState.IDLE:
-                        client_thread = threading.Thread(target=handle_client,
-                                                         args=(conn, addr))
+                    if vacant_player_slot is not None:
+                        print(f"[INFO] Treating {addr} as reconnection into slot {vacant_player_slot + 1}\n")
+                        reconnect_player(conn, addr)
+                    else:
+                        # Regular new connection
+                        client_thread = threading.Thread(target=handle_client, args=(conn, addr))
                         client_thread.daemon = True
                         client_thread.start()
-                        continue    # accept next
-
-                    # ------------  OTHERWISE: REJECT ------------
-                    # If we are in cleanup phase or connection limit reached
-                    wfile = conn.makefile('wb')
-                    rfile = conn.makefile('rb')
-                    if server_state is ServerState.POST_GAME:
-                        reason = "Server busy finishing last game – please try again in a few seconds."
-                    else:
-                        reason = "Server is full – please try again later."
-                    safe_send(wfile, rfile, f"[INFO] {reason}\n\n")
-                    wfile.close(); rfile.close(); conn.close()
+                except BlockingIOError:
+                    # No connection available, sleep briefly to prevent CPU spinning
+                    time.sleep(0.1)
+                    continue
+                    
         except KeyboardInterrupt:
             print("\n[INFO] Server shutting down...\n")
             # Notify all connected players

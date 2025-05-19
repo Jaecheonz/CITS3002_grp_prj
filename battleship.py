@@ -275,11 +275,6 @@ def run_multiplayer_game_online(player_reconnecting, all_connections):
         player_reconnecting: threading.Event() - set when all players are connected, cleared if a player is reconnecting
         all_connections: list of tuples for each player/spectator
     """
-    # Ensure the reconnect flag is set at the beginning of every new game so
-    # timer logic inside handle_input_during_turn() starts with the correct
-    # assumption that both players are present.
-    player_reconnecting.set()
-
     def send_to_player(player_idx, message):
         """Send a message to a player."""
         try:
