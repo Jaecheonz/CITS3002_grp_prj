@@ -164,8 +164,8 @@ Each packet consists of a header and payload:
   - timestamp: Creation time (datetime)
 - Methods:
   - _calculate_checksum(): Computes checksum
-  - pack(): Serializes to binary format
-  - unpack(): Deserializes from binary format
+  - pack(): Serialises to binary format
+  - unpack(): Deserialises from binary format
 
 ## Performance Considerations
 - Minimal overhead in normal operation
@@ -173,5 +173,5 @@ Each packet consists of a header and payload:
 - Thread-safe operations
 - Controlled polling intervals
 - Automatic cleanup of old packets
-- Optimized for game state synchronization
+- Optimised for game state synchronisation
 - Very rarely, may be unable to recover severely corrupted packets

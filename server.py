@@ -158,7 +158,6 @@ def check_all_connections(check_index=None):
         if all_connections[i] is not None:
             try:
                 conn, addr, rfile, wfile, num = all_connections[i]
-                print(f"[DEBUG] Checking connection {num} at index {i}")
                 
                 # Use select with a very short timeout to check if socket is readable
                 readable, _, _ = select.select([conn], [], [], 0)
@@ -174,14 +173,10 @@ def check_all_connections(check_index=None):
                         # and doesn't indicate a disconnection
                         pass
                     except (ConnectionResetError, OSError) as e:
-                        print(f"[DEBUG] Exception caught for connection {num} at index {i}: {str(e)}")
                         disconnected_indices.append((i, num))
             except (ConnectionResetError, OSError) as e:
-                print(f"[DEBUG] Exception caught for connection {num} at index {i}: {str(e)}")
                 disconnected_indices.append((i, num))
-    
-    print(f"[DEBUG] Found {len(disconnected_indices)} disconnected connections")
-    
+        
     # Handle disconnections if any found
     if disconnected_indices:
         for i, num in disconnected_indices:
@@ -209,7 +204,6 @@ def check_all_connections(check_index=None):
         disconnected_indices.clear()
         print(f"[DEBUG] a player disconnection detected in check_all_connections")
         return True
-    print(f"[DEBUG] No disconnections detected in check_all_connections")
     return False
 
 def monitor_connections():
@@ -395,14 +389,11 @@ def start_game_countdown():
         
         # Wait before starting new game
         time.sleep(GAME_END_DELAY)
-        print(f"[DEBUG] sleep timer is up")
         # Reset game state
         with game_in_progress_lock:
             game_in_progress = False
-        print(f"[DEBUG] resetted game_in_progress to false")
         # Handle next game players
         with connection_lock:
-            print(f"[DEBUG] connection lock is locked")
             # Check and remove disconnected players
             for i in range(MAX_PLAYERS):  # Only check first two indices
                 if all_connections[i] is not None:  # Only check if connection exists
@@ -417,7 +408,6 @@ def start_game_countdown():
                 # Notify the player about their new position
                 _, _, rfile, wfile, _ = all_connections[0]
                 safe_send(wfile, rfile, f"[INFO] You will be Player 1 in the next game!\n\n")
-                print(f"[DEBUG] moved P2 to P1 position")
             
             # Promote spectators to fill vacant player slots
             vacant_slots = [i for i in range(MAX_PLAYERS) if all_connections[i] is None]
@@ -455,29 +445,22 @@ def start_game_countdown():
                     else:
                         safe_send(wfile, rfile, f"[INFO] Game will start soon!\n\n")
 
-        print(f"[DEBUG] Number of connections: {len(all_connections)}")
-        print(f"[DEBUG] Countdown timer running: {countdown_timer_running}")
-
         # Start countdown for next game if we have enough players
         active_players = get_active_players()
         if len(active_players) == MAX_PLAYERS:
             print("[DEBUG] Attempting to start next game countdown")
             with countdown_timer_lock:
                 if not countdown_timer_running:
-                    print("[DEBUG] Starting new countdown thread")
                     countdown_timer_running = True
                     start_timer_thread = threading.Thread(target=start_game_countdown)
                     start_timer_thread.daemon = True
                     start_timer_thread.start()
-                    print("[DEBUG] Countdown thread started")
                     with state_lock:
                         state.server_state = state.ServerState.COUNTDOWN
                 else:
                     print("[DEBUG] Countdown already running")
 
         else:
-            print("[DEBUG] Not enough active players. Disconnecting remaining clients and resetting server.")
-            
             with connection_lock:
                 player1_entry = all_connections[0]
                 if player1_entry is not None:
@@ -500,7 +483,6 @@ def start_game_countdown():
     except Exception as e:
         print(f"[ERROR] Error in game countdown: {e}\n")
     finally:
-        print("[DEBUG] Resetting countdown timer flag")
         with countdown_timer_lock:
             countdown_timer_running = False
             state.server_state = state.ServerState.IDLE
