@@ -3,10 +3,10 @@
 ## Requirements
 
 - **Python 3.8+**
-- **pycryptodome** library
+- **pycryptodomex** library
   Install with:
   ```
-  pip install cryptography
+  pip install pycryptodomex
   ```
 
 ---
